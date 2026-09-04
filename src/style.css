@@ -261,16 +261,18 @@ input[type='range'] {
 
 /* Frame strip ------------------------------------------------------------ */
 
+/* The timeline manages its own view window (zoom + pan), so unlike the palette
+   grid there is no scroll container here: a horizontal scrollbar and a zoom
+   control would fight over the same axis. */
 #frame-strip {
   background: var(--panel);
   border-top: 1px solid var(--line);
-  overflow-x: auto;
-  overflow-y: hidden;
-  min-height: 64px;
+  overflow: hidden;
 }
 #strip-canvas {
   display: block;
-  cursor: pointer;
+  width: 100%;
+  cursor: crosshair;
 }
 #frame-strip-controls {
   display: flex;

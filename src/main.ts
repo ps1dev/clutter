@@ -55,6 +55,7 @@ import {
   type FrameStripLayout,
   type PaletteGridLayout,
 } from './ui/grids.js';
+import { TimelineView } from './ui/timeline.js';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T;
 
@@ -187,7 +188,9 @@ const state: AppState = {
 const paletteCanvas = $<HTMLCanvasElement>('palette-canvas');
 const paletteCanvasCtx = paletteCanvas.getContext('2d')!;
 const stripCanvas = $<HTMLCanvasElement>('strip-canvas');
-const stripCanvasCtx = stripCanvas.getContext('2d')!;
+const timeline = new TimelineView(stripCanvas);
+/** Frame span selected on the timeline, inclusive, or null. */
+let frameSpan: [number, number] | null = null;
 let paletteGridLayout: PaletteGridLayout = paletteLayout(0, 260);
 let stripLayout: FrameStripLayout = frameStripLayout(0);
 
@@ -529,6 +532,24 @@ stripCanvas.addEventListener('click', (ev) => {
   if (i !== null) selectFrame(i);
 });
 
+/**
+ * The panels resize each other: the timeline sets its own height after its
+ * first draw, which changes the viewport's box. Watching the boxes rather than
+ * only the window catches that, and catches the sidebar reflowing when the
+ * palette wraps to a different column count.
+ */
+const ro = new ResizeObserver(() => {
+  resizeCanvas();
+  if (state.animation) {
+    clampCurrentView();
+    renderPaletteGrid();
+    timeline.requestDraw();
+  }
+  draw();
+});
+ro.observe(canvasWrap);
+ro.observe(paletteGrid);
+
 window.addEventListener('resize', () => {
   if (state.animation) renderPaletteGrid();
 });
@@ -654,22 +675,49 @@ function renderFrameStrip(): void {
   if (!state.animation) {
     statusFrames.textContent = '0 frames';
     statusLoop.textContent = 'no loop';
-    sizeCanvas(stripCanvas, 0, frameStripLayout(0).height);
     return;
   }
   const anim = state.animation;
   statusFrames.textContent = `${anim.frames.length} frame${anim.frames.length === 1 ? '' : 's'}`;
-  statusLoop.textContent = anim.loopStart !== null ? `loops at ${anim.loopStart}` : 'no loop';
+  const spanNote = frameSpan ? `, ${frameSpan[1] - frameSpan[0] + 1} selected` : '';
+  statusLoop.textContent =
+    (anim.loopStart !== null ? `loops at ${anim.loopStart}` : 'no loop') + spanNote;
 
-  stripLayout = frameStripLayout(anim.frames.length);
-  sizeCanvas(stripCanvas, stripLayout.width, stripLayout.height);
-  drawFrameStrip(stripCanvasCtx, {
-    frames: anim.frames,
-    fmt: formatById(anim.formatId),
-    current: state.currentFrame,
-    loopStart: anim.loopStart,
-    layout: stripLayout,
-  });
+  timeline.current = state.currentFrame;
+  timeline.loopStart = anim.loopStart;
+  timeline.selection = frameSpan;
+  timeline.playheadTick = state.playing ? tickForFrame(anim, state.currentFrame) : null;
+  timeline.setContent({ frames: anim.frames, fmt: formatById(anim.formatId) });
+}
+
+timeline.onScrub = (tick) => {
+  if (!state.animation) return;
+  stopPlayback();
+  let acc = 0;
+  for (let i = 0; i < state.animation.frames.length; i++) {
+    acc += Math.max(1, state.animation.frames[i].hold);
+    if (tick < acc) return selectFrame(i);
+  }
+  selectFrame(state.animation.frames.length - 1);
+};
+timeline.onSelectFrame = (i) => {
+  stopPlayback();
+  selectFrame(i);
+};
+timeline.onSelectSpan = (span) => {
+  frameSpan = span;
+  renderFrameStrip();
+};
+timeline.onSetLoop = (i) => {
+  if (!state.animation) return;
+  state.animation = setLoopStart(state.animation, i);
+  refreshAll();
+};
+
+/** The frames the edit buttons act on: the selected span, else the current frame. */
+function targetSpan(): [number, number] {
+  if (frameSpan) return frameSpan;
+  return [state.currentFrame, state.currentFrame];
 }
 
 function selectFrame(i: number): void {
@@ -690,33 +738,44 @@ fInsert.addEventListener('click', () => {
 
 fDelete.addEventListener('click', () => {
   if (!state.animation) return;
-  state.animation = deleteFrame(state.animation, state.currentFrame);
-  state.currentFrame = Math.min(state.currentFrame, state.animation.frames.length - 1);
+  const [lo, hi] = targetSpan();
+  for (let i = hi; i >= lo; i--) state.animation = deleteFrame(state.animation, i);
+  state.currentFrame = Math.min(lo, state.animation.frames.length - 1);
+  frameSpan = null;
   refreshAll();
 });
 
 fDuplicate.addEventListener('click', () => {
   if (!state.animation) return;
-  state.animation = duplicateFrame(state.animation, state.currentFrame);
-  state.currentFrame = state.currentFrame + 1;
+  const [lo, hi] = targetSpan();
+  const copies: Frame[] = [];
+  for (let i = lo; i <= hi; i++) {
+    const f = state.animation.frames[i];
+    copies.push({ palette: f.palette.map((e) => ({ ...e })), hold: f.hold });
+  }
+  state.animation = insertFrames(state.animation, hi + 1, copies);
+  state.currentFrame = hi + 1;
+  frameSpan = frameSpan ? [hi + 1, hi + copies.length] : null;
   refreshAll();
 });
 
 fMoveLeft.addEventListener('click', () => {
   if (!state.animation) return;
-  const to = state.currentFrame - 1;
-  if (to < 0) return;
-  state.animation = moveFrame(state.animation, state.currentFrame, to);
-  state.currentFrame = to;
+  const [lo, hi] = targetSpan();
+  if (lo - 1 < 0) return;
+  for (let i = lo; i <= hi; i++) state.animation = moveFrame(state.animation, i, i - 1);
+  state.currentFrame = Math.max(0, state.currentFrame - 1);
+  if (frameSpan) frameSpan = [lo - 1, hi - 1];
   refreshAll();
 });
 
 fMoveRight.addEventListener('click', () => {
   if (!state.animation) return;
-  const to = state.currentFrame + 1;
-  if (to >= state.animation.frames.length) return;
-  state.animation = moveFrame(state.animation, state.currentFrame, to);
-  state.currentFrame = to;
+  const [lo, hi] = targetSpan();
+  if (hi + 1 >= state.animation.frames.length) return;
+  for (let i = hi; i >= lo; i--) state.animation = moveFrame(state.animation, i, i + 1);
+  state.currentFrame = Math.min(state.animation.frames.length - 1, state.currentFrame + 1);
+  if (frameSpan) frameSpan = [lo + 1, hi + 1];
   refreshAll();
 });
 
@@ -1119,7 +1178,9 @@ function tickLoop(now: number): void {
   if (frameIdx !== state.currentFrame) {
     state.currentFrame = frameIdx;
     composeAndDraw();
-    updateFrameStripSelection();
+    timeline.current = state.currentFrame;
+    timeline.playheadTick = t;
+    timeline.requestDraw();
     updatePaletteColors();
     renderEntryEditor();
   }

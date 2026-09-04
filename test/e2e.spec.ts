@@ -173,11 +173,6 @@ describe('generating and playing', () => {
     await importFixture('indexed8-trns.png');
     const before = (await status.call(null)) ?? '';
     expect(await page.textContent('#s-frames')).toBe('1 frame');
-    const widthBefore = await page.evaluate(
-      () => (document.getElementById('strip-canvas') as HTMLCanvasElement).clientWidth,
-    );
-    // The generators live in modals now, so the dialog has to be open before
-    // its inputs are reachable.
     await page.click('#open-cycle');
     expect(await page.locator('#dlg-cycle').isVisible()).toBe(true);
     await page.fill('#g-cycle-lo', '0');
@@ -186,24 +181,21 @@ describe('generating and playing', () => {
     await page.click('#g-cycle-run');
     await page.evaluate(() => (document.getElementById('dlg-cycle') as HTMLDialogElement).close());
     expect(await page.textContent('#s-frames')).toBe('9 frames');
-    const widthAfter = await page.evaluate(
-      () => (document.getElementById('strip-canvas') as HTMLCanvasElement).clientWidth,
-    );
-    expect(widthAfter).toBeGreaterThan(widthBefore);
     await shot('04-cycled');
 
-    // Frames must actually differ. Sample a column of pixels out of each
-    // thumbnail: eight copies of the base palette would pass the count
-    // assertion above and fail this one.
+    // The timeline fits the whole animation across its width, so sampling a
+    // column at nine evenly spaced x positions crosses nine different frames.
+    // Eight copies of the base palette would satisfy the frame count above and
+    // fail this.
     const signatures = await page.evaluate(() => {
       const c = document.getElementById('strip-canvas') as HTMLCanvasElement;
       const g = c.getContext('2d')!;
       const dpr = window.devicePixelRatio || 1;
       const out: string[] = [];
       for (let i = 0; i < 9; i++) {
-        const x = Math.round((8 + i * 52 + 24) * dpr);
+        const x = Math.round(((i + 0.5) / 9) * c.clientWidth * dpr);
         if (x >= c.width) break;
-        const col = g.getImageData(x, Math.round(8 * dpr), 1, Math.round(48 * dpr)).data;
+        const col = g.getImageData(Math.min(x, c.width - 1), Math.round(20 * dpr), 1, Math.round(24 * dpr)).data;
         out.push(Array.from(col).join(','));
       }
       return out;
