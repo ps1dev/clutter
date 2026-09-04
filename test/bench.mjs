@@ -33,9 +33,19 @@ async function run(fixture, hi) {
   await page.setInputFiles('#file-png', resolve(ROOT, 'test/fixtures', fixture));
   await page.waitForFunction(() => (document.querySelector('#s-msg')?.textContent ?? '').length > 0);
   await page.click('#btn-fit');
+  // The cycle takes its entries from the palette selection now.
+  const step = 34;
+  const pos = await page.evaluate(
+    ([n, st]) => {
+      const c = document.getElementById('palette-canvas');
+      const cols = Math.max(1, Math.floor((c.clientWidth + 2) / st));
+      return { x: (n % cols) * st + 16, y: Math.floor(n / cols) * st + 16 };
+    },
+    [Number(hi), step],
+  );
+  await page.locator('#palette-canvas').click({ position: { x: 16, y: 16 } });
+  await page.locator('#palette-canvas').click({ position: pos, modifiers: ['Shift'] });
   await page.click('#open-cycle');
-  await page.fill('#g-cycle-lo', '0');
-  await page.fill('#g-cycle-hi', hi);
   await page.fill('#g-cycle-steps', '16');
   await page.click('#g-cycle-run');
   await page.evaluate(() => document.getElementById('dlg-cycle').close());
