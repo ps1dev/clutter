@@ -183,11 +183,17 @@ input[type='range'] {
 
 /* Palette grid ------------------------------------------------------- */
 
+/* Scroll container. The canvas inside is sized to its natural content size
+   and the browser does all the scrolling; nothing in main.ts reads or writes
+   scrollLeft/scrollTop. */
 #palette-grid {
-  display: grid;
-  grid-template-columns: repeat(8, 1fr);
-  gap: 2px;
   margin-bottom: 6px;
+  max-height: 46vh;
+  overflow: auto;
+}
+#palette-canvas {
+  display: block;
+  cursor: pointer;
 }
 .swatch {
   position: relative;
@@ -249,14 +255,15 @@ input[type='range'] {
 /* Frame strip ------------------------------------------------------------ */
 
 #frame-strip {
-  display: flex;
-  gap: 4px;
-  align-items: stretch;
-  padding: 6px 8px;
   background: var(--panel);
   border-top: 1px solid var(--line);
   overflow-x: auto;
+  overflow-y: hidden;
   min-height: 64px;
+}
+#strip-canvas {
+  display: block;
+  cursor: pointer;
 }
 #frame-strip-controls {
   display: flex;

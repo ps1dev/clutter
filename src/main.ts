@@ -45,6 +45,16 @@ import {
 } from './core/animation.js';
 import { hsvRamp, interpolateTo, cycleRange, type CycleDirection } from './core/generators.js';
 import { paletteLut, composeInto, createImageBuffer } from './core/compose.js';
+import {
+  drawFrameStrip,
+  drawPaletteGrid,
+  frameHitTest,
+  frameStripLayout,
+  paletteHitTest,
+  paletteLayout,
+  type FrameStripLayout,
+  type PaletteGridLayout,
+} from './ui/grids.js';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T;
 
@@ -155,11 +165,26 @@ const state: AppState = {
   playing: false,
 };
 
-// Live references into the palette grid and frame strip, so playback can
-// repaint them without rebuilding. See updatePaletteColors().
-const paletteFills: HTMLElement[] = [];
-const frameCells: HTMLElement[] = [];
-let currentCell: HTMLElement | null = null;
+const paletteCanvas = $<HTMLCanvasElement>('palette-canvas');
+const paletteCanvasCtx = paletteCanvas.getContext('2d')!;
+const stripCanvas = $<HTMLCanvasElement>('strip-canvas');
+const stripCanvasCtx = stripCanvas.getContext('2d')!;
+let paletteGridLayout: PaletteGridLayout = paletteLayout(0, 260);
+let stripLayout: FrameStripLayout = frameStripLayout(0);
+
+/**
+ * Size a canvas's backing store in device pixels and its box in CSS pixels,
+ * then set the transform once. Same contract as the viewport: everything
+ * downstream draws and hit-tests in CSS pixels.
+ */
+function sizeCanvas(c: HTMLCanvasElement, cssW: number, cssH: number): void {
+  const dpr = window.devicePixelRatio || 1;
+  c.width = Math.max(1, Math.round(cssW * dpr));
+  c.height = Math.max(1, Math.round(cssH * dpr));
+  c.style.width = `${cssW}px`;
+  c.style.height = `${cssH}px`;
+  c.getContext('2d')!.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
 
 let dragging: { x: number; y: number } | null = null;
 let rafId: number | null = null;
@@ -378,71 +403,57 @@ formatSelect.addEventListener('change', () => {
 let lastClickedIndex: number | null = null;
 let cycleHighlight: [number, number] | null = null;
 
+function paletteContainerWidth(): number {
+  const w = paletteGrid.clientWidth;
+  return w > 0 ? w : 260;
+}
+
 function renderPaletteGrid(): void {
-  paletteGrid.innerHTML = '';
   paletteEmpty.classList.toggle('hidden', !!state.animation);
+  paletteCanvas.classList.toggle('hidden', !state.animation);
   if (!state.animation) return;
 
   const fmt = formatById(state.animation.formatId);
-  const frame = state.animation.frames[state.currentFrame];
-
-  frame.palette.forEach((e, i) => {
-    const sw = document.createElement('div');
-    sw.className = 'swatch';
-    if (state.selected.has(i)) sw.classList.add('selected');
-    if (cycleHighlight && i >= cycleHighlight[0] && i <= cycleHighlight[1]) sw.classList.add('in-range');
-
-    const fill = document.createElement('div');
-    fill.className = 'fill';
-    const d = fmt.display(e);
-    fill.style.background = `rgba(${d.r},${d.g},${d.b},${d.a / 255})`;
-    sw.appendChild(fill);
-
-    const idx = document.createElement('span');
-    idx.className = 'idx';
-    idx.textContent = String(i);
-    sw.appendChild(idx);
-
-    sw.title = `#${i}  ${packedHex(fmt, e)}`;
-    sw.addEventListener('click', (ev) => onSwatchClick(i, ev));
-    paletteGrid.appendChild(sw);
-    paletteFills[i] = fill;
+  const palette = state.animation.frames[state.currentFrame].palette;
+  paletteGridLayout = paletteLayout(palette.length, paletteContainerWidth());
+  sizeCanvas(paletteCanvas, paletteGridLayout.width, paletteGridLayout.height);
+  drawPaletteGrid(paletteCanvasCtx, {
+    palette,
+    fmt,
+    selected: state.selected,
+    range: cycleHighlight,
+    layout: paletteGridLayout,
   });
-  paletteFills.length = frame.palette.length;
 }
 
 /**
- * Repaint the existing swatches without rebuilding them.
- *
- * Playback used to call renderPaletteGrid() and renderFrameStrip() on every
- * frame change, which tore down and rebuilt every swatch and every frame-strip
- * cell - 544 elements per frame on a 17-frame, 32-colour animation. Measured
- * at 5.4 fps on a 320x240 image, with the profile dominated by createElement,
- * appendChild and the style/layout/paint that follows them; the actual pixel
- * work (composeInto) was 0.2%. Mutating a style on an existing node does not
- * invalidate layout the way inserting one does.
+ * Both grids are a single canvas each, so "repaint" and "rebuild" are the same
+ * call and there is no separate fast path to keep in sync with the slow one.
+ * That is the second reason for the rewrite, after the measured one in
+ * ui/grids.ts: the DOM version needed a mutate-in-place path beside the
+ * build-from-scratch path, and two renderers for one thing drift.
  */
-function updatePaletteColors(): void {
-  if (!state.animation) return;
-  const fmt = formatById(state.animation.formatId);
-  const frame = state.animation.frames[state.currentFrame];
-  for (let i = 0; i < frame.palette.length; i++) {
-    const fill = paletteFills[i];
-    if (!fill) continue;
-    const d = fmt.display(frame.palette[i]);
-    fill.style.background = `rgba(${d.r},${d.g},${d.b},${d.a / 255})`;
-  }
-}
+const updatePaletteColors = renderPaletteGrid;
+const updateFrameStripSelection = (): void => renderFrameStrip();
 
-/** Move the `current` marker in the frame strip. No rebuild. */
-function updateFrameStripSelection(): void {
-  if (currentCell) currentCell.classList.remove('current');
-  const cell = frameCells[state.currentFrame];
-  if (cell) {
-    cell.classList.add('current');
-    currentCell = cell;
-  }
-}
+paletteCanvas.addEventListener('click', (ev) => {
+  if (!state.animation) return;
+  const r = paletteCanvas.getBoundingClientRect();
+  const count = state.animation.frames[state.currentFrame].palette.length;
+  const i = paletteHitTest(paletteGridLayout, count, ev.clientX - r.left, ev.clientY - r.top);
+  if (i !== null) onSwatchClick(i, ev);
+});
+
+stripCanvas.addEventListener('click', (ev) => {
+  if (!state.animation) return;
+  const r = stripCanvas.getBoundingClientRect();
+  const i = frameHitTest(stripLayout, state.animation.frames.length, ev.clientX - r.left);
+  if (i !== null) selectFrame(i);
+});
+
+window.addEventListener('resize', () => {
+  if (state.animation) renderPaletteGrid();
+});
 
 function onSwatchClick(i: number, ev: MouseEvent): void {
   if (ev.shiftKey && lastClickedIndex !== null) {
@@ -562,51 +573,25 @@ eHex.addEventListener('change', () => {
 // ---------------------------------------------------------------------------
 
 function renderFrameStrip(): void {
-  frameStrip.innerHTML = '';
-  frameCells.length = 0;
-  currentCell = null;
   if (!state.animation) {
     statusFrames.textContent = '0 frames';
     statusLoop.textContent = 'no loop';
+    sizeCanvas(stripCanvas, 0, frameStripLayout(0).height);
     return;
   }
+  const anim = state.animation;
+  statusFrames.textContent = `${anim.frames.length} frame${anim.frames.length === 1 ? '' : 's'}`;
+  statusLoop.textContent = anim.loopStart !== null ? `loops at ${anim.loopStart}` : 'no loop';
 
-  statusFrames.textContent = `${state.animation.frames.length} frame${state.animation.frames.length === 1 ? '' : 's'}`;
-  statusLoop.textContent = state.animation.loopStart !== null ? `loops at ${state.animation.loopStart}` : 'no loop';
-
-  const fmt = formatById(state.animation.formatId);
-
-  state.animation.frames.forEach((f, i) => {
-    const cell = document.createElement('div');
-    cell.className = 'frame-cell';
-    if (i === state.currentFrame) cell.classList.add('current');
-    if (state.animation!.loopStart !== null && i < state.animation!.loopStart) cell.classList.add('before-loop');
-    cell.title = `frame ${i}, hold ${f.hold}`;
-
-    for (const e of f.palette) {
-      const d = fmt.display(e);
-      const swatch = document.createElement('i');
-      swatch.style.background = `rgba(${d.r},${d.g},${d.b},${d.a / 255})`;
-      cell.appendChild(swatch);
-    }
-
-    if (state.animation!.loopStart === i) {
-      const flag = document.createElement('div');
-      flag.className = 'loop-flag';
-      cell.appendChild(flag);
-    }
-
-    const num = document.createElement('span');
-    num.className = 'frame-num';
-    num.textContent = String(i);
-    cell.appendChild(num);
-
-    cell.addEventListener('click', () => selectFrame(i));
-    frameStrip.appendChild(cell);
-    frameCells[i] = cell;
-    if (i === state.currentFrame) currentCell = cell;
+  stripLayout = frameStripLayout(anim.frames.length);
+  sizeCanvas(stripCanvas, stripLayout.width, stripLayout.height);
+  drawFrameStrip(stripCanvasCtx, {
+    frames: anim.frames,
+    fmt: formatById(anim.formatId),
+    current: state.currentFrame,
+    loopStart: anim.loopStart,
+    layout: stripLayout,
   });
-  frameCells.length = state.animation.frames.length;
 }
 
 function selectFrame(i: number): void {

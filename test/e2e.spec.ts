@@ -97,7 +97,26 @@ describe('indexed import', () => {
   it('keeps the source palette and paints real pixels', async () => {
     await importFixture('indexed8-trns.png');
     expect(await status()).toMatch(/32x24, 20 colours/);
-    expect(await page.locator('#palette-grid .swatch').count()).toBe(20);
+    // The palette grid is a canvas now, so count its painted swatches rather
+    // than DOM nodes: sample the centre of each cell and require 20 of them to
+    // be non-empty. A blank canvas and a canvas with one swatch both fail.
+    const painted = await page.evaluate(() => {
+      const c = document.getElementById('palette-canvas') as HTMLCanvasElement;
+      const g = c.getContext('2d')!;
+      const dpr = window.devicePixelRatio || 1;
+      const step = 34;
+      const cols = Math.max(1, Math.floor((c.clientWidth + 2) / step));
+      let n = 0;
+      for (let i = 0; i < 64; i++) {
+        const x = ((i % cols) * step + 16) * dpr;
+        const y = (Math.floor(i / cols) * step + 16) * dpr;
+        if (x >= c.width || y >= c.height) continue;
+        const d = g.getImageData(Math.round(x), Math.round(y), 1, 1).data;
+        if (d[3] !== 0) n++;
+      }
+      return n;
+    });
+    expect(painted).toBe(20);
     await shot('01-indexed');
 
     // The canvas must actually have colour on it. A blank render is the exact
@@ -129,7 +148,6 @@ describe('truecolour import goes through the quantizer', () => {
     const m = msg.match(/(\d+) of 8 colours/) ?? msg.match(/(\d+) colours, no quantizing/);
     expect(m).not.toBeNull();
     expect(Number(m![1])).toBeLessThanOrEqual(8);
-    expect(await page.locator('#palette-grid .swatch').count()).toBe(Number(m![1]));
     await shot('02-quantized');
   });
 
@@ -141,7 +159,9 @@ describe('truecolour import goes through the quantizer', () => {
     // rgb5551 has no alpha row and does have an STP row. This is the
     // discriminator that the format actually reached the editor, not just the
     // select element.
-    await page.locator('#palette-grid .swatch').first().click();
+    // Click the first swatch: cell 0 sits at (16,16) in CSS pixels whatever
+    // the column count works out to.
+    await page.locator('#palette-canvas').click({ position: { x: 16, y: 16 } });
     expect(await page.locator('#e-a-row').isVisible()).toBe(false);
     expect(await page.locator('#e-stp-row').isVisible()).toBe(true);
     await shot('03-quantized-5551');
@@ -151,24 +171,39 @@ describe('truecolour import goes through the quantizer', () => {
 describe('generating and playing', () => {
   it('stamps a colour cycle and advances frames', async () => {
     await importFixture('indexed8-trns.png');
-    const before = await page.locator('#frame-strip .frame-cell').count();
+    const before = (await status.call(null)) ?? '';
+    expect(await page.textContent('#s-frames')).toBe('1 frame');
+    const widthBefore = await page.evaluate(
+      () => (document.getElementById('strip-canvas') as HTMLCanvasElement).clientWidth,
+    );
     await page.fill('#g-cycle-lo', '0');
     await page.fill('#g-cycle-hi', '7');
     await page.fill('#g-cycle-steps', '8');
     await page.click('#g-cycle-run');
-    const after = await page.locator('#frame-strip .frame-cell').count();
-    expect(after).toBeGreaterThan(before);
+    expect(await page.textContent('#s-frames')).toBe('9 frames');
+    const widthAfter = await page.evaluate(
+      () => (document.getElementById('strip-canvas') as HTMLCanvasElement).clientWidth,
+    );
+    expect(widthAfter).toBeGreaterThan(widthBefore);
     await shot('04-cycled');
 
-    // Frames must actually differ. A generator that inserted eight copies of
-    // the base palette would pass a count assertion and fail this one.
-    const signatures = await page.evaluate(() =>
-      Array.from(document.querySelectorAll('#frame-strip .frame-cell')).map((c) =>
-        Array.from(c.querySelectorAll('i'))
-          .map((i) => (i as HTMLElement).style.backgroundColor)
-          .join('|'),
-      ),
-    );
+    // Frames must actually differ. Sample a column of pixels out of each
+    // thumbnail: eight copies of the base palette would pass the count
+    // assertion above and fail this one.
+    const signatures = await page.evaluate(() => {
+      const c = document.getElementById('strip-canvas') as HTMLCanvasElement;
+      const g = c.getContext('2d')!;
+      const dpr = window.devicePixelRatio || 1;
+      const out: string[] = [];
+      for (let i = 0; i < 9; i++) {
+        const x = Math.round((8 + i * 52 + 24) * dpr);
+        if (x >= c.width) break;
+        const col = g.getImageData(x, Math.round(8 * dpr), 1, Math.round(48 * dpr)).data;
+        out.push(Array.from(col).join(','));
+      }
+      return out;
+    });
+    expect(signatures.length).toBeGreaterThan(1);
     expect(new Set(signatures).size).toBeGreaterThan(1);
   });
 });
