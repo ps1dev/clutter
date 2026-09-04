@@ -221,16 +221,51 @@ function isImageData(source: CanvasImageSource | ImageData): source is ImageData
   return typeof ImageData !== 'undefined' && source instanceof ImageData;
 }
 
-/** Transparency checker, tiled in SCREEN space (does not zoom with the image). */
+let checkerTile: HTMLCanvasElement | null = null;
+let checkerPattern: CanvasPattern | null = null;
+
+/**
+ * Transparency checker, tiled in SCREEN space (does not zoom with the image).
+ *
+ * Drawn as ONE fillRect through a cached repeating pattern. The obvious
+ * two-nested-loops version costs a fillStyle assignment and a fillRect per
+ * 8x8 cell, which on a 1400x900 viewport is ~19,600 of each PER FRAME - it
+ * was measured as the second largest cost in playback and it scales with the
+ * window rather than with the image.
+ */
 function drawCheckerboard(ctx: CanvasRenderingContext2D, cssW: number, cssH: number): void {
-  ctx.save();
-  for (let y = 0; y < cssH; y += CHECKER_SIZE) {
-    for (let x = 0; x < cssW; x += CHECKER_SIZE) {
-      const parity = (Math.round(x / CHECKER_SIZE) + Math.round(y / CHECKER_SIZE)) % 2;
-      ctx.fillStyle = parity === 0 ? CHECKER_LIGHT : CHECKER_DARK;
-      ctx.fillRect(x, y, CHECKER_SIZE, CHECKER_SIZE);
+  if (typeof ctx.createPattern !== 'function' || typeof document === 'undefined') {
+    // Non-DOM harness: fall back to the direct version so tests still run.
+    ctx.save();
+    for (let y = 0; y < cssH; y += CHECKER_SIZE) {
+      for (let x = 0; x < cssW; x += CHECKER_SIZE) {
+        const parity = (Math.round(x / CHECKER_SIZE) + Math.round(y / CHECKER_SIZE)) % 2;
+        ctx.fillStyle = parity === 0 ? CHECKER_LIGHT : CHECKER_DARK;
+        ctx.fillRect(x, y, CHECKER_SIZE, CHECKER_SIZE);
+      }
     }
+    ctx.restore();
+    return;
   }
+
+  if (!checkerTile) {
+    checkerTile = document.createElement('canvas');
+    checkerTile.width = CHECKER_SIZE * 2;
+    checkerTile.height = CHECKER_SIZE * 2;
+    const t = checkerTile.getContext('2d')!;
+    t.fillStyle = CHECKER_LIGHT;
+    t.fillRect(0, 0, CHECKER_SIZE * 2, CHECKER_SIZE * 2);
+    t.fillStyle = CHECKER_DARK;
+    t.fillRect(CHECKER_SIZE, 0, CHECKER_SIZE, CHECKER_SIZE);
+    t.fillRect(0, CHECKER_SIZE, CHECKER_SIZE, CHECKER_SIZE);
+    checkerPattern = null;
+  }
+  if (!checkerPattern) checkerPattern = ctx.createPattern(checkerTile, 'repeat');
+  if (!checkerPattern) return;
+
+  ctx.save();
+  ctx.fillStyle = checkerPattern;
+  ctx.fillRect(0, 0, cssW, cssH);
   ctx.restore();
 }
 
@@ -280,19 +315,28 @@ function drawGrid(
  * `ImageData` as the source will throw. Pass a `CanvasImageSource` (an
  * `HTMLCanvasElement`, `ImageBitmap`, etc.) instead in that case.
  */
+let stagingCanvas: HTMLCanvasElement | null = null;
+let stagingCtx: CanvasRenderingContext2D | null = null;
+
 function drawImageDataSource(
   ctx: CanvasRenderingContext2D,
   data: ImageData,
   imageW: number,
   imageH: number,
 ): void {
-  const off = document.createElement('canvas');
-  off.width = data.width;
-  off.height = data.height;
-  const offCtx = off.getContext('2d');
-  if (!offCtx) throw new Error('viewport: could not get 2D context for offscreen canvas');
-  offCtx.putImageData(data, 0, 0);
-  ctx.drawImage(off, 0, 0, imageW, imageH);
+  // Cached across calls. Allocating a canvas per frame was costing a full
+  // allocation plus a GC cycle at animation rate; the staging canvas only ever
+  // needs to change when the image dimensions do.
+  if (!stagingCanvas) stagingCanvas = document.createElement('canvas');
+  if (stagingCanvas.width !== data.width || stagingCanvas.height !== data.height) {
+    stagingCanvas.width = data.width;
+    stagingCanvas.height = data.height;
+    stagingCtx = null;
+  }
+  if (!stagingCtx) stagingCtx = stagingCanvas.getContext('2d');
+  if (!stagingCtx) throw new Error('viewport: could not get 2D context for offscreen canvas');
+  stagingCtx.putImageData(data, 0, 0);
+  ctx.drawImage(stagingCanvas, 0, 0, imageW, imageH);
 }
 
 /**
