@@ -17,7 +17,7 @@
  * second. That mapping is the reason for the units.
  */
 
-import type { Entry, FormatId } from '../shared/color.js';
+import type { ColorFormat, Entry, FormatId } from '../shared/color.js';
 
 export interface Frame {
   palette: Entry[];
@@ -165,4 +165,82 @@ export function frameAtTick(anim: Animation, t: number): number | null {
     if (tick < acc) return i;
   }
   return anim.frames.length - 1;
+}
+
+/**
+ * Editing across frames.
+ *
+ * Pre-baked palettes have one ergonomic hole: a colour you got wrong is wrong
+ * in every frame, and fixing it slot by slot across thirty-two frames is not a
+ * thing anyone will do. But "the same slot in every frame" and "the same colour
+ * in every frame" are DIFFERENT operations here, and picking the wrong one
+ * quietly destroys the animation:
+ *
+ *   - After a colour cycle, index 5 holds a different colour in every frame.
+ *     Writing one value into index 5 everywhere flattens the cycle.
+ *   - A background colour that never moves lives at a fixed index and wants
+ *     exactly that write.
+ *
+ * So both exist, and `entryIsStatic` tells the UI which one to offer.
+ */
+
+
+/** True when this palette index holds the same packed value in every frame. */
+export function entryIsStatic(anim: Animation, fmt: ColorFormat, index: number): boolean {
+  const first = anim.frames[0]?.palette[index];
+  if (!first) return false;
+  const want = fmt.pack(first);
+  return anim.frames.every((f) => {
+    const e = f.palette[index];
+    return e !== undefined && fmt.pack(e) === want;
+  });
+}
+
+/** Write one entry into the same slot in every frame, or in a frame range. */
+export function setEntryAcrossFrames(
+  anim: Animation,
+  index: number,
+  entry: Entry,
+  range?: { from: number; to: number },
+): Animation {
+  const lo = range ? Math.max(0, Math.min(range.from, range.to)) : 0;
+  const hi = range ? Math.min(anim.frames.length - 1, Math.max(range.from, range.to)) : anim.frames.length - 1;
+  const frames = anim.frames.map((f, i) => {
+    if (i < lo || i > hi) return f;
+    if (index < 0 || index >= f.palette.length) return f;
+    const palette = f.palette.slice();
+    palette[index] = { ...entry };
+    return { palette, hold: f.hold };
+  });
+  return { ...anim, frames };
+}
+
+/**
+ * Replace one COLOUR wherever it appears, in any slot, in any frame. This is
+ * the one that survives cycling: the colour moves between indices frame to
+ * frame, so it has to be tracked by value rather than by slot.
+ *
+ * Matching is on the packed value in `fmt`, so two entries that are
+ * indistinguishable on the target hardware are treated as the same colour even
+ * if their 8-bit authoring values differ.
+ */
+export function remapColorAcrossFrames(
+  anim: Animation,
+  fmt: ColorFormat,
+  from: Entry,
+  to: Entry,
+): { animation: Animation; replaced: number } {
+  const want = fmt.pack(from);
+  let replaced = 0;
+  const frames = anim.frames.map((f) => {
+    let touched = false;
+    const palette = f.palette.map((e) => {
+      if (fmt.pack(e) !== want) return e;
+      touched = true;
+      replaced++;
+      return { ...to };
+    });
+    return touched ? { palette, hold: f.hold } : f;
+  });
+  return { animation: { ...anim, frames }, replaced };
 }

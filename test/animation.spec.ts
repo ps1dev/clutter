@@ -6,6 +6,9 @@ import {
   frameAtTick,
   insertFrames,
   moveFrame,
+  entryIsStatic,
+  remapColorAcrossFrames,
+  setEntryAcrossFrames,
   setHold,
   setLoopStart,
   totalTicks,
@@ -13,7 +16,7 @@ import {
   type Frame,
 } from '../src/core/animation.js';
 import { cycleRange, hsvRamp, interpolateTo } from '../src/core/generators.js';
-import type { Entry } from '../src/shared/color.js';
+import { formatById, type Entry } from '../src/shared/color.js';
 
 const e = (r: number, g: number, b: number): Entry => ({ r, g, b, a: 255 });
 const A = e(255, 0, 0);
@@ -154,5 +157,61 @@ describe('ramp step maths', () => {
   it('a closed interpolation stops short of the target on purpose', () => {
     const out = interpolateTo({ base: [A], indices: [0], to: B, steps: 5, closed: true });
     expect(out[4][0]).not.toEqual(B);
+  });
+});
+
+describe('editing across frames', () => {
+  const fmt = formatById('rgb5551');
+  const base = [A, B, C, D];
+  const cycled: Animation = {
+    formatId: 'rgb5551',
+    paletteSize: 4,
+    frames: cycleRange({ base, lo: 0, hi: 2, steps: 3 }).map((p) => ({ palette: p, hold: 1 })),
+    loopStart: 0,
+    fps: 60,
+  };
+
+  it('knows which entries animate and which do not', () => {
+    // Index 3 sits outside the cycled range, so it never moves.
+    expect(entryIsStatic(cycled, fmt, 3)).toBe(true);
+    expect(entryIsStatic(cycled, fmt, 0)).toBe(false);
+  });
+
+  it('writes a slot in every frame', () => {
+    const next = setEntryAcrossFrames(cycled, 3, A);
+    expect(next.frames.every((f) => f.palette[3].r === 255 && f.palette[3].g === 0)).toBe(true);
+  });
+
+  it('honours a frame range', () => {
+    const next = setEntryAcrossFrames(cycled, 3, A, { from: 1, to: 1 });
+    expect(next.frames[0].palette[3]).toEqual(D);
+    expect(next.frames[1].palette[3]).toEqual(A);
+    expect(next.frames[2].palette[3]).toEqual(D);
+  });
+
+  it('follows a colour through a cycle when remapping by value', () => {
+    const white = e(255, 255, 255);
+    const { animation, replaced } = remapColorAcrossFrames(cycled, fmt, A, white);
+    // A appears once per frame, at a different index each time. The
+    // discriminator against the slot-based edit: the index differs per frame.
+    expect(replaced).toBe(3);
+    const where = animation.frames.map((f) => f.palette.findIndex((x) => x.r === 255 && x.g === 255));
+    expect(where).toEqual([0, 1, 2]);
+  });
+
+  it('leaves the cycle intact when remapping by value', () => {
+    const white = e(255, 255, 255);
+    const { animation } = remapColorAcrossFrames(cycled, fmt, A, white);
+    // Every frame still holds three distinct colours in the cycled range.
+    for (const f of animation.frames) {
+      const packed = new Set(f.palette.slice(0, 3).map((x) => fmt.pack(x)));
+      expect(packed.size).toBe(3);
+    }
+  });
+
+  it('flattens the cycle when the slot edit is used instead, which is why both exist', () => {
+    const next = setEntryAcrossFrames(cycled, 0, e(255, 255, 255));
+    const atZero = new Set(next.frames.map((f) => fmt.pack(f.palette[0])));
+    expect(atZero.size).toBe(1);
   });
 });
