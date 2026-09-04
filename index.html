@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>clutter - palette animation editor</title>
+<link rel="stylesheet" href="./src/style.css">
+</head>
+<body>
+<div id="app">
+
+  <div id="toolbar">
+    <label>Import <input type="file" id="file-png" accept="image/png" class="hidden"></label>
+    <button id="btn-import">Open PNG</button>
+    <span class="sep"></span>
+    <label>Format
+      <select id="format-select"></select>
+    </label>
+    <label title="Palette size used when quantizing a truecolour PNG on import">Colours
+      <input type="number" id="colors-input" min="2" max="256" step="1" value="16">
+    </label>
+    <span class="sep"></span>
+    <button id="btn-play">Play</button>
+    <label>fps <input type="number" id="fps-input" min="1" max="240" step="1" value="60"></label>
+    <span class="sep"></span>
+    <span id="zoom-label" style="min-width:48px;text-align:center">100%</span>
+    <button id="btn-zoom-out">-</button>
+    <button id="btn-zoom-in">+</button>
+    <button id="btn-fit">Fit</button>
+    <button id="btn-1to1">1:1</button>
+    <span class="grow"></span>
+    <span id="format-change-note" class="note"></span>
+  </div>
+
+  <div id="main">
+    <div id="canvas-wrap">
+      <canvas id="canvas"></canvas>
+      <div id="readout"></div>
+      <div id="import-hint">Open a PNG to begin. An indexed PNG keeps its own palette; anything truecolour is quantized to the colour count in the toolbar.</div>
+    </div>
+
+    <div id="right">
+      <h2>Palette</h2>
+      <div id="palette-grid"></div>
+      <div class="note" id="palette-empty">No image loaded.</div>
+
+      <div id="entry-editor" class="hidden">
+        <div class="slider-row">
+          <label for="e-r">R</label>
+          <input type="range" id="e-r-range" min="0" max="255" step="1">
+          <input type="number" id="e-r" min="0" max="255" step="1">
+        </div>
+        <div class="slider-row">
+          <label for="e-g">G</label>
+          <input type="range" id="e-g-range" min="0" max="255" step="1">
+          <input type="number" id="e-g" min="0" max="255" step="1">
+        </div>
+        <div class="slider-row">
+          <label for="e-b">B</label>
+          <input type="range" id="e-b-range" min="0" max="255" step="1">
+          <input type="number" id="e-b" min="0" max="255" step="1">
+        </div>
+        <div class="slider-row" id="e-a-row">
+          <label for="e-a">A</label>
+          <input type="range" id="e-a-range" min="0" max="255" step="1">
+          <input type="number" id="e-a" min="0" max="255" step="1">
+        </div>
+        <label id="e-stp-row"><input type="checkbox" id="e-stp"> STP (semi-transparency flag)</label>
+        <div class="field"><span class="k">packed</span><span class="v"><input type="text" id="e-hex" style="width:100px;text-align:right"></span></div>
+        <p class="warn-text hidden" id="e-diagnose"></p>
+      </div>
+
+      <h2>Generators</h2>
+
+      <div class="generator">
+        <h3>Colour cycle</h3>
+        <div class="row">
+          <label>lo <input type="number" id="g-cycle-lo" min="0" value="0"></label>
+          <label>hi <input type="number" id="g-cycle-hi" min="0" value="0"></label>
+        </div>
+        <div class="row">
+          <label>direction
+            <select id="g-cycle-dir">
+              <option value="forward">forward</option>
+              <option value="backward">backward</option>
+            </select>
+          </label>
+        </div>
+        <div class="row">
+          <label>steps <input type="number" id="g-cycle-steps" min="1" value="1"></label>
+        </div>
+        <div class="note" id="g-cycle-distinct"></div>
+        <button id="g-cycle-run">Generate</button>
+        <div class="note" id="g-cycle-stalled"></div>
+      </div>
+
+      <div class="generator">
+        <h3>HSB ramp</h3>
+        <div class="row">
+          <label>hue from <input type="number" id="g-hsb-hue-from" step="1" value="0"></label>
+          <label>hue to <input type="number" id="g-hsb-hue-to" step="1" value="360"></label>
+        </div>
+        <div class="row">
+          <label>saturation &times; <input type="number" id="g-hsb-sat" min="0" step="0.05" value="1"></label>
+          <label>value &times; <input type="number" id="g-hsb-val" min="0" step="0.05" value="1"></label>
+        </div>
+        <div class="row">
+          <label>steps <input type="number" id="g-hsb-steps" min="1" value="12"></label>
+          <label><input type="checkbox" id="g-hsb-closed"> closed</label>
+        </div>
+        <div class="note" id="g-hsb-distinct"></div>
+        <button id="g-hsb-run">Generate</button>
+        <div class="note" id="g-hsb-stalled"></div>
+      </div>
+
+      <div class="generator">
+        <h3>Fade to colour</h3>
+        <div class="row">
+          <label>target <input type="color" id="g-fade-color" value="#000000"></label>
+          <label>alpha <input type="number" id="g-fade-alpha" min="0" max="255" step="1" value="255"></label>
+        </div>
+        <div class="row">
+          <label>steps <input type="number" id="g-fade-steps" min="1" value="8"></label>
+          <label><input type="checkbox" id="g-fade-closed"> closed</label>
+        </div>
+        <div class="note" id="g-fade-distinct"></div>
+        <button id="g-fade-run">Generate</button>
+        <div class="note" id="g-fade-stalled"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="frame-strip"></div>
+  <div id="frame-strip-controls">
+    <button id="f-insert">Insert</button>
+    <button id="f-delete">Delete</button>
+    <button id="f-duplicate">Duplicate</button>
+    <button id="f-move-left">&larr; Move</button>
+    <button id="f-move-right">Move &rarr;</button>
+    <span class="sep"></span>
+    <label>hold <input type="number" id="f-hold" min="1" step="1" value="1"></label>
+    <span class="sep"></span>
+    <button id="f-loop-set">Set loop here</button>
+    <button id="f-loop-clear">No loop</button>
+  </div>
+
+  <div id="status-bar">
+    <span id="s-frames">0 frames</span>
+    <span id="s-loop">no loop</span>
+    <span id="s-hover"></span>
+    <span class="grow"></span>
+    <span id="s-msg"></span>
+  </div>
+</div>
+
+<script type="module" src="./src/main.ts"></script>
+</body>
+</html>
