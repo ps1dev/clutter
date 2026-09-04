@@ -22,7 +22,10 @@ const LITTLE_ENDIAN = (() => {
   return new Uint8Array(probe)[0] === 0x44;
 })();
 
-function packWord(r: number, g: number, b: number, a: number): number {
+/** True on little-endian hosts. Exported so tests can assert the byte order that is actually in play. */
+export const HOST_LITTLE_ENDIAN = LITTLE_ENDIAN;
+
+export function packWord(r: number, g: number, b: number, a: number): number {
   return LITTLE_ENDIAN
     ? ((a << 24) | (b << 16) | (g << 8) | r) >>> 0
     : ((r << 24) | (g << 16) | (b << 8) | a) >>> 0;
@@ -48,7 +51,14 @@ export function paletteLut(fmt: ColorFormat, palette: Entry[], size = 256): Uint
  * size. Reuse the same ImageData across frames; allocating one per frame is
  * what turns a smooth preview into a garbage-collection stutter.
  */
-export function composeInto(target: ImageData, indices: Uint8Array, lut: Uint32Array): void {
+export function composeInto(
+  // Structurally typed rather than `ImageData` so this is testable without a
+  // DOM. It only ever touches `.data`, and an untestable hot path is how a
+  // red/blue swap ships.
+  target: { data: Uint8ClampedArray },
+  indices: Uint8Array,
+  lut: Uint32Array,
+): void {
   const words = new Uint32Array(target.data.buffer, target.data.byteOffset, target.data.length / 4);
   const n = Math.min(words.length, indices.length);
   for (let i = 0; i < n; i++) {
