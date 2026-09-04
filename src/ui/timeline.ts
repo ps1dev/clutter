@@ -29,6 +29,11 @@ const DEFAULT_PAD = 8;
 const DEFAULT_LANE_H = 32;
 const DEFAULT_MIN_SPAN_W = 3;
 const RULER_H = 14;
+/** Span width at or above which the between-frames grid is worth drawing. */
+const GRID_MIN_SPAN_W = 6;
+/** Bounds on how far the widget will zoom, in CSS pixels per tick. */
+export const MIN_PX_PER_TICK = 0.1;
+export const MAX_PX_PER_TICK = 50;
 const LABEL_H = 12;
 
 // "Nice" tick-ruler intervals, in ticks. The first one whose on-screen extent
@@ -304,13 +309,25 @@ export function drawTimeline(ctx: CanvasRenderingContext2D, input: TimelineInput
     }
   }
 
-  // Current-frame marker: a border around its span, green like grids.ts's
-  // current-frame stroke, kept distinct from the selection's blue.
-  const curSpan = layout.spans[current];
-  if (curSpan) {
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = '#7ee787';
-    ctx.strokeRect(curSpan.x + 1, laneY + 1, Math.max(0, curSpan.w - 2), laneH - 2);
+  // The current frame gets no border: the playhead already says where it is,
+  // and two markers for one fact is one marker too many (spicyjpeg, 2026-09-04).
+  //
+  // What replaces it is a frame grid, drawn only once the spans are wide enough
+  // for the lines to separate rather than smear - the same rule the image
+  // viewport uses for its pixel grid.
+  if (layout.spans.length > 1) {
+    const narrowest = Math.min(...layout.spans.map((sp) => sp.w));
+    if (narrowest >= GRID_MIN_SPAN_W) {
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = 'rgba(180, 190, 200, 0.35)';
+      ctx.beginPath();
+      for (let i = 1; i < layout.spans.length; i++) {
+        const gx = Math.round(layout.spans[i].x) + 0.5;
+        ctx.moveTo(gx, laneY);
+        ctx.lineTo(gx, laneY + laneH);
+      }
+      ctx.stroke();
+    }
   }
 
   // Loop marker flag, same corner-triangle idea as grids.ts.
@@ -418,6 +435,8 @@ export interface TimelineContent {
 }
 
 const MIN_WINDOW_TICKS = 4;
+/** How far past either end the view may be pushed, as a fraction of the window. */
+const OVERSCROLL = 0.5;
 
 export class TimelineView {
   canvas: HTMLCanvasElement;
@@ -486,13 +505,23 @@ export class TimelineView {
     this.requestDraw();
   }
 
+  /**
+   * Window bounds come from the px-per-tick limits rather than from the
+   * content, and the start may run half a window past either end.
+   *
+   * Both on spicyjpeg's ask: without overscroll the first and last frames sit
+   * under the widget's edges at high zoom and cannot be brought inboard, which
+   * is the same complaint he had about the image viewport.
+   */
   setView(start: number, end: number): void {
     const total = Math.max(MIN_WINDOW_TICKS, this.totalTicks);
-    let len = Math.max(MIN_WINDOW_TICKS, end - start);
-    if (len > total) len = total;
-    let s = Math.max(0, Math.min(start, total - len));
-    this.viewStartTick = s;
-    this.viewEndTick = s + len;
+    const w = Math.max(1, this.cssWidth);
+    const minLen = w / MAX_PX_PER_TICK;
+    const maxLen = Math.max(minLen, Math.min(total, w / MIN_PX_PER_TICK));
+    const len = Math.max(minLen, Math.min(maxLen, end - start));
+    const slack = len * OVERSCROLL;
+    this.viewStartTick = Math.max(-slack, Math.min(total - len + slack, start));
+    this.viewEndTick = this.viewStartTick + len;
     this.onView?.();
     this.requestDraw();
   }
@@ -685,6 +714,16 @@ export class TimelineView {
       (ev) => {
         if (!this.frames.length) return;
         ev.preventDefault();
+        // A horizontal wheel (or a trackpad's horizontal axis) pans; the
+        // vertical one zooms. Checked first, because a horizontal gesture on a
+        // trackpad also carries a little deltaY and would otherwise zoom.
+        if (Math.abs(ev.deltaX) > Math.abs(ev.deltaY)) {
+          this._userMovedView = true;
+          const perPx = this.windowTicks / Math.max(1, this.cssWidth);
+          const start = this.viewStartTick + ev.deltaX * perPx;
+          this.setView(start, start + this.windowTicks);
+          return;
+        }
         const tick = this.tickAt(this._localX(ev));
         this.zoomAt(tick, ev.deltaY > 0 ? 1.25 : 0.8);
       },

@@ -74,6 +74,21 @@ async function importFixture(name: string): Promise<void> {
   );
 }
 
+
+/** Click palette swatch `i`, computing its position the way the grid lays it out. */
+async function clickSwatch(i: number, shift = false): Promise<void> {
+  const pos = await page.evaluate((n) => {
+    const c = document.getElementById('palette-canvas') as HTMLCanvasElement;
+    const step = 34; // cell 32 + gap 2, from paletteLayout's defaults
+    const cols = Math.max(1, Math.floor((c.clientWidth + 2) / step));
+    return { x: (n % cols) * step + 16, y: Math.floor(n / cols) * step + 16 };
+  }, i);
+  await page.locator('#palette-canvas').click({
+    position: pos,
+    modifiers: shift ? ['Shift'] : [],
+  });
+}
+
 const status = () => page.textContent('#s-msg');
 const shot = async (name: string) => {
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/${name}.png` });
@@ -173,10 +188,19 @@ describe('generating and playing', () => {
     await importFixture('indexed8-trns.png');
     const before = (await status.call(null)) ?? '';
     expect(await page.textContent('#s-frames')).toBe('1 frame');
+    // The cycle now takes its range from the PALETTE selection, and is
+    // disabled without one. Assert the disabled state first: it is the new
+    // rule, and a test that only exercises the happy path cannot tell a
+    // working gate from an absent one.
     await page.click('#open-cycle');
     expect(await page.locator('#dlg-cycle').isVisible()).toBe(true);
-    await page.fill('#g-cycle-lo', '0');
-    await page.fill('#g-cycle-hi', '7');
+    expect(await page.locator('#g-cycle-run').isDisabled()).toBe(true);
+    await page.evaluate(() => (document.getElementById('dlg-cycle') as HTMLDialogElement).close());
+
+    await clickSwatch(0);
+    await clickSwatch(7, true);
+    await page.click('#open-cycle');
+    expect(await page.locator('#g-cycle-run').isDisabled()).toBe(false);
     await page.fill('#g-cycle-steps', '8');
     await page.click('#g-cycle-run');
     await page.evaluate(() => (document.getElementById('dlg-cycle') as HTMLDialogElement).close());

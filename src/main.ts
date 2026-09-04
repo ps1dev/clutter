@@ -43,7 +43,14 @@ import {
   type Animation,
   type Frame,
 } from './core/animation.js';
-import { hsvRamp, interpolateTo, cycleRange, type CycleDirection } from './core/generators.js';
+import {
+  cycleEntries,
+  hsvRamp,
+  hsvRampOver,
+  interpolateOver,
+  interpolateTo,
+  type CycleDirection,
+} from './core/generators.js';
 import { paletteLut, composeInto, createImageBuffer } from './core/compose.js';
 import {
   drawFrameStrip,
@@ -101,8 +108,7 @@ const fHold = $<HTMLInputElement>('f-hold');
 const fLoopSet = $<HTMLButtonElement>('f-loop-set');
 const fLoopClear = $<HTMLButtonElement>('f-loop-clear');
 
-const gCycleLo = $<HTMLInputElement>('g-cycle-lo');
-const gCycleHi = $<HTMLInputElement>('g-cycle-hi');
+const gCycleTarget = $('g-cycle-target');
 const gCycleDir = $<HTMLSelectElement>('g-cycle-dir');
 const gCycleSteps = $<HTMLInputElement>('g-cycle-steps');
 const gCycleDistinct = $('g-cycle-distinct');
@@ -374,9 +380,6 @@ function loadIndexedImage(img: IndexedImage): void {
   state.view = fitView(state.view, img.width, img.height, rect.width, rect.height);
 
   fpsInput.value = String(state.animation.fps);
-  gCycleLo.max = String(palette.length - 1);
-  gCycleHi.max = String(palette.length - 1);
-  gCycleHi.value = String(palette.length - 1);
 
   importHint.classList.add('hidden');
   formatChangeNote.textContent = '';
@@ -805,14 +808,43 @@ function selectedOrAll(base: Entry[]): number[] {
   return state.selected.size > 0 ? [...state.selected].sort((a, b) => a - b) : base.map((_, i) => i);
 }
 
+/**
+ * Put a generator's output into the animation.
+ *
+ * Two modes, and which one applies is decided by whether a timeline span is
+ * selected rather than by a control the user has to find:
+ *
+ *   span selected   REPLACE those frames, keeping each one's hold. The ramp
+ *                   transformed frames that already exist, so inserting copies
+ *                   beside them would be the wrong operation entirely.
+ *   no span         INSERT after the current frame, and select what was just
+ *                   made - you almost always want to act on it next.
+ */
 function insertGenerated(generated: Entry[][], kind: string, params: Record<string, unknown>): void {
   if (!state.animation) return;
+  const span = frameSpan;
+  if (span) {
+    const frames = state.animation.frames.slice();
+    for (let k = 0; k < generated.length && span[0] + k < frames.length; k++) {
+      frames[span[0] + k] = {
+        palette: generated[k],
+        hold: frames[span[0] + k].hold,
+        from: { kind, params, step: k },
+      };
+    }
+    state.animation = { ...state.animation, frames };
+    state.currentFrame = span[0];
+    return;
+  }
   const frames: Frame[] = generated.map((palette, k) => ({
     palette,
     hold: 1,
     from: { kind, params, step: k },
   }));
-  state.animation = insertFrames(state.animation, state.currentFrame + 1, frames);
+  const at = state.currentFrame + 1;
+  state.animation = insertFrames(state.animation, at, frames);
+  frameSpan = frames.length > 1 ? [at, at + frames.length - 1] : null;
+  state.currentFrame = at;
 }
 
 // ---------------------------------------------------------------------------
@@ -828,12 +860,17 @@ function insertGenerated(generated: Entry[][], kind: string, params: Record<stri
 // ---------------------------------------------------------------------------
 
 function buildCycleRun(base: Entry[]) {
-  const lo = clampToPalette(Number(gCycleLo.value), base.length);
-  const hi = clampToPalette(Number(gCycleHi.value), base.length);
+  const indices = [...state.selected].filter((i) => i >= 0 && i < base.length).sort((a, b) => a - b);
   const direction = gCycleDir.value as CycleDirection;
   const steps = Math.max(1, Math.round(Number(gCycleSteps.value)));
-  const params = { lo: Math.min(lo, hi), hi: Math.max(lo, hi), direction, steps };
-  return { params, frames: cycleRange({ base, ...params }) };
+  const params = { indices, direction, steps };
+  return { params, frames: cycleEntries({ base, indices, direction, steps }) };
+}
+
+/** The frames a generator should transform, when a timeline span is selected. */
+function spanFrames(): { palette: Entry[] }[] | null {
+  if (!frameSpan || !state.animation) return null;
+  return state.animation.frames.slice(frameSpan[0], frameSpan[1] + 1);
 }
 
 function buildHsbRun(base: Entry[]) {
@@ -844,17 +881,15 @@ function buildHsbRun(base: Entry[]) {
   const val = Number(gHsbVal.value);
   const steps = Math.max(1, Math.round(Number(gHsbSteps.value)));
   const closed = gHsbClosed.checked;
-  const params = { indices, hueFrom, hueTo, sat, val, steps, closed };
+  const over = spanFrames();
+  const params = { indices, hueFrom, hueTo, sat, val, steps: over ? over.length : steps, closed };
+  const from = { hue: hueFrom, sat, val };
+  const to = { hue: hueTo, sat, val };
   return {
     params,
-    frames: hsvRamp({
-      base,
-      indices,
-      from: { hue: hueFrom, sat, val },
-      to: { hue: hueTo, sat, val },
-      steps,
-      closed,
-    }),
+    frames: over
+      ? hsvRampOver({ frames: over, indices, from, to, closed })
+      : hsvRamp({ base, indices, from, to, steps, closed }),
   };
 }
 
@@ -863,8 +898,14 @@ function buildFadeRun(base: Entry[]) {
   const to = fadeTargetEntry();
   const steps = Math.max(1, Math.round(Number(gFadeSteps.value)));
   const closed = gFadeClosed.checked;
-  const params = { indices, to, steps, closed };
-  return { params, frames: interpolateTo({ base, indices, to, steps, closed }) };
+  const over = spanFrames();
+  const params = { indices, to, steps: over ? over.length : steps, closed };
+  return {
+    params,
+    frames: over
+      ? interpolateOver({ frames: over, indices, to, closed })
+      : interpolateTo({ base, indices, to, steps, closed }),
+  };
 }
 
 /** How many of these palettes are distinct once packed into the target format. */
@@ -893,14 +934,41 @@ function updateGeneratorNotes(): void {
   const fmt = formatById(state.animation.formatId);
   const base = state.animation.frames[state.currentFrame].palette;
 
+  // Availability, on spicyjpeg's rules: the cycle needs palette entries and
+  // has nothing to say about a span of existing frames, while the two ramps
+  // take their length FROM a span when one is selected, so their step count
+  // stops being an input.
+  const span = spanFrames();
   const cycle = buildCycleRun(base);
-  const loop = cycle.params.hi - cycle.params.lo + 1;
-  gCycleDistinct.textContent = runNote(
-    fmt,
-    cycle.frames,
-    `one full loop of entries ${cycle.params.lo}-${cycle.params.hi} is ${loop} step${loop === 1 ? '' : 's'}`,
-  );
-  cycleHighlight = [cycle.params.lo, cycle.params.hi];
+  const nSel = cycle.params.indices.length;
+  const cycleOff = span !== null || nSel < 2;
+  gCycleRun.disabled = cycleOff;
+  $<HTMLInputElement>('g-cycle-steps').disabled = cycleOff;
+  gCycleTarget.textContent =
+    span !== null
+      ? 'Not available while a timeline span is selected: cycling rewrites the palette, it does not transform existing frames.'
+      : nSel < 2
+        ? 'Select two or more palette entries to cycle. A non-contiguous selection is cycled as if it were contiguous.'
+        : `Cycles the ${nSel} selected entries, in index order.`;
+
+  for (const id of ['hsb', 'fade']) {
+    $(`g-${id}-steps-row`).classList.toggle('disabled', span !== null);
+    $<HTMLInputElement>(`g-${id}-steps`).disabled = span !== null;
+  }
+
+  if (cycleOff) {
+    gCycleDistinct.textContent = '';
+    cycleHighlight = null;
+  } else {
+    const loop = nSel;
+    gCycleDistinct.textContent = runNote(
+      fmt,
+      cycle.frames,
+      `one full loop of ${nSel} entries is ${loop} step${loop === 1 ? '' : 's'}`,
+    );
+  }
+  const ci = cycle.params.indices;
+  cycleHighlight = ci.length ? [ci[0], ci[ci.length - 1]] : null;
 
   const indices = selectedOrAll(base);
   if (indices.length > 0) {
@@ -929,7 +997,7 @@ function fadeTargetEntry(): Entry {
   };
 }
 
-[gCycleLo, gCycleHi, gHsbHueFrom, gHsbHueTo, gHsbSat, gHsbVal, gFadeColor, gFadeAlpha].forEach((el) => {
+[gHsbHueFrom, gHsbHueTo, gHsbSat, gHsbVal, gFadeColor, gFadeAlpha].forEach((el) => {
   el.addEventListener('input', updateGeneratorNotes);
 });
 
@@ -941,7 +1009,6 @@ gCycleRun.addEventListener('click', () => {
   const fmt = formatById(state.animation.formatId);
   const stalled = countStalledFrames(fmt, generated);
   gCycleStalled.textContent = `${stalled} stalled frame${stalled === 1 ? '' : 's'} in this run`;
-  state.currentFrame += 1;
   refreshAll();
 });
 
@@ -953,7 +1020,6 @@ gHsbRun.addEventListener('click', () => {
   const fmt = formatById(state.animation.formatId);
   const stalled = countStalledFrames(fmt, generated);
   gHsbStalled.textContent = `${stalled} stalled frame${stalled === 1 ? '' : 's'} in this run`;
-  state.currentFrame += 1;
   refreshAll();
 });
 
@@ -965,7 +1031,6 @@ gFadeRun.addEventListener('click', () => {
   const fmt = formatById(state.animation.formatId);
   const stalled = countStalledFrames(fmt, generated);
   gFadeStalled.textContent = `${stalled} stalled frame${stalled === 1 ? '' : 's'} in this run`;
-  state.currentFrame += 1;
   refreshAll();
 });
 

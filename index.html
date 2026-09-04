@@ -107,10 +107,7 @@
 <dialog id="dlg-cycle" class="generator-dialog">
   <form method="dialog"><button class="dlg-close" aria-label="Close">&times;</button></form>
   <h3>Colour cycle</h3>
-        <div class="row">
-          <label>lo <input type="number" id="g-cycle-lo" min="0" value="0"></label>
-          <label>hi <input type="number" id="g-cycle-hi" min="0" value="0"></label>
-        </div>
+        <p class="note" id="g-cycle-target">Cycles the palette entries you have selected.</p>
         <div class="row">
           <label>direction
             <select id="g-cycle-dir">
@@ -140,7 +137,7 @@
           <label>value &times; <input type="number" id="g-hsb-val" min="0" step="0.05" value="1"></label>
         </div>
         <div class="row">
-          <label>steps <input type="number" id="g-hsb-steps" min="1" value="12"></label>
+          <label id="g-hsb-steps-row">steps <input type="number" id="g-hsb-steps" min="1" value="12"></label>
           <label><input type="checkbox" id="g-hsb-closed"> closed</label>
         </div>
         <div class="note" id="g-hsb-distinct"></div>
@@ -157,7 +154,7 @@
           <label>alpha <input type="number" id="g-fade-alpha" min="0" max="255" step="1" value="255"></label>
         </div>
         <div class="row">
-          <label>steps <input type="number" id="g-fade-steps" min="1" value="8"></label>
+          <label id="g-fade-steps-row">steps <input type="number" id="g-fade-steps" min="1" value="8"></label>
           <label><input type="checkbox" id="g-fade-closed"> closed</label>
         </div>
         <div class="note" id="g-fade-distinct"></div>

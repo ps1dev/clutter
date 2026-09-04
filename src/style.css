@@ -410,3 +410,9 @@ input[type='range'] {
   cursor: pointer;
   padding: 0 2px;
 }
+
+/* A generator input whose value is being taken from the timeline selection
+   instead. Greyed rather than hidden, so the control does not move around. */
+.disabled {
+  opacity: 0.4;
+}

@@ -318,19 +318,26 @@ describe('drawTimeline', () => {
     expect(atExpected).toBe(true);
   });
 
-  it('draws a selection overlay and border in a colour distinct from the current-frame marker', () => {
+  it('draws a selection overlay and border', () => {
     const { input } = buildInput({ current: 0, selection: [1, 3] });
     const { ctx, calls } = makeFakeCtx();
     drawTimeline(ctx, input);
 
     const selectionFill = calls.find((c) => c.m === 'fillRect' && c.fillStyle.includes('88,166,255'));
     const selectionBorder = calls.find((c) => c.m === 'strokeRect' && c.strokeStyle === '#58a6ff');
-    const currentFrameBorder = calls.find((c) => c.m === 'strokeRect' && c.strokeStyle === '#7ee787');
-
     expect(selectionFill).toBeDefined();
     expect(selectionBorder).toBeDefined();
-    expect(currentFrameBorder).toBeDefined();
-    expect(selectionBorder!.strokeStyle).not.toBe(currentFrameBorder!.strokeStyle);
+  });
+
+  it('draws NO border around the current frame', () => {
+    // Removed 2026-09-04: it duplicated the playhead, which already says where
+    // the current frame is. Asserted rather than deleted, because "we took the
+    // marker out" and "the marker silently stopped drawing" look identical in
+    // a suite that only checks what IS drawn.
+    const { input } = buildInput({ current: 2, selection: null });
+    const { ctx, calls } = makeFakeCtx();
+    drawTimeline(ctx, input);
+    expect(calls.find((c) => c.m === 'strokeRect' && c.strokeStyle === '#7ee787')).toBeUndefined();
   });
 
   it('dims spans before loopStart', () => {

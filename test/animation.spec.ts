@@ -15,7 +15,14 @@ import {
   type Animation,
   type Frame,
 } from '../src/core/animation.js';
-import { cycleRange, hsvRamp, interpolateTo } from '../src/core/generators.js';
+import {
+  cycleEntries,
+  cycleRange,
+  hsvRamp,
+  hsvRampOver,
+  interpolateOver,
+  interpolateTo,
+} from '../src/core/generators.js';
 import { formatById, type Entry } from '../src/shared/color.js';
 
 const e = (r: number, g: number, b: number): Entry => ({ r, g, b, a: 255 });
@@ -213,5 +220,54 @@ describe('editing across frames', () => {
     const next = setEntryAcrossFrames(cycled, 0, e(255, 255, 255));
     const atZero = new Set(next.frames.map((f) => fmt.pack(f.palette[0])));
     expect(atZero.size).toBe(1);
+  });
+});
+
+describe('selection-driven generators', () => {
+  const base = [A, B, C, D];
+
+  it('cycles a non-contiguous selection as if it were contiguous', () => {
+    // Indices 0 and 3 only: their values swap, and 1 and 2 never move.
+    const out = cycleEntries({ base, indices: [3, 0], steps: 2 });
+    expect(out[0]).toEqual([A, B, C, D]);
+    expect(out[1]).toEqual([D, B, C, A]);
+  });
+
+  it('normalises selection order to index order', () => {
+    const asc = cycleEntries({ base, indices: [0, 1, 2], steps: 3 });
+    const desc = cycleEntries({ base, indices: [2, 1, 0], steps: 3 });
+    // The discriminator against "cycles in click order": these must agree.
+    expect(desc).toEqual(asc);
+  });
+
+  it('agrees with cycleRange on a contiguous selection', () => {
+    expect(cycleEntries({ base, indices: [0, 1, 2], steps: 3 })).toEqual(
+      cycleRange({ base, lo: 0, hi: 2, steps: 3 }),
+    );
+  });
+
+  it('ramps across EXISTING frames rather than copying the first', () => {
+    const frames = [{ palette: [A] }, { palette: [B] }, { palette: [C] }];
+    const out = hsvRampOver({ frames, from: { val: 1 }, to: { val: 1 }, closed: false });
+    // A zero-strength ramp must leave each frame as ITSELF. If the generator
+    // were copying frame 0, all three would come back red.
+    expect(out[0][0].r).toBe(255);
+    expect(out[1][0].g).toBe(255);
+    expect(out[2][0].b).toBe(255);
+  });
+
+  it('fades each frame from its own colour', () => {
+    const frames = [{ palette: [A] }, { palette: [B] }];
+    const out = interpolateOver({ frames, to: e(0, 0, 0), closed: false });
+    expect(out[0][0]).toEqual({ ...A });
+    // Fully faded to the target, whose alpha is 255 - the fade covers colour,
+    // not opacity, unless the target says otherwise.
+    expect(out[1][0]).toEqual({ r: 0, g: 0, b: 0, a: 255 });
+  });
+
+  it('emits exactly one palette per input frame', () => {
+    const frames = [{ palette: [A] }, { palette: [B] }, { palette: [C] }, { palette: [D] }];
+    expect(interpolateOver({ frames, to: A }).length).toBe(4);
+    expect(hsvRampOver({ frames, from: {}, to: { hue: 180 } }).length).toBe(4);
   });
 });

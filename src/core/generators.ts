@@ -142,3 +142,101 @@ export function cycleRange(opts: CycleOptions): Entry[][] {
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Selection-driven variants (spicyjpeg, 2026-09-04)
+//
+// The originals all take ONE base palette and emit N copies of it with the
+// effect ramped across them. That is right when you are creating frames, and
+// wrong when frames already exist: applying a fade to a selected span should
+// modify those frames, not replace them with N variations of the first one.
+// ---------------------------------------------------------------------------
+
+export interface CycleEntriesOptions {
+  base: Entry[];
+  /** Palette indices to rotate among each other. Order is normalised to ascending. */
+  indices: number[];
+  direction?: CycleDirection;
+  steps?: number;
+}
+
+/**
+ * Rotate the colours held at an arbitrary SET of palette indices.
+ *
+ * A non-contiguous selection is cycled as if it were contiguous: the values
+ * move between the selected slots in index order and nothing between them is
+ * touched. `cycleRange` is this with a contiguous index list.
+ */
+export function cycleEntries(opts: CycleEntriesOptions): Entry[][] {
+  const { base } = opts;
+  const idx = [...new Set(opts.indices)].filter((i) => i >= 0 && i < base.length).sort((a, b) => a - b);
+  const dir = opts.direction ?? 'forward';
+  const len = idx.length;
+  if (len <= 1) return [copy(base)];
+  const steps = Math.max(1, opts.steps ?? len);
+  const out: Entry[][] = [];
+  for (let k = 0; k < steps; k++) {
+    const pal = copy(base);
+    for (let i = 0; i < len; i++) {
+      const shift = dir === 'forward' ? i - k : i + k;
+      const src = ((shift % len) + len) % len;
+      pal[idx[i]] = { ...base[idx[src]] };
+    }
+    out.push(pal);
+  }
+  return out;
+}
+
+export interface OverFramesOptions {
+  /** The existing frames to transform, in order. One palette out per frame in. */
+  frames: { palette: Entry[] }[];
+  indices?: number[];
+  closed?: boolean;
+}
+
+/** Ramp an HSV shift ACROSS existing frames, transforming each in place. */
+export function hsvRampOver(opts: OverFramesOptions & { from: HsvDelta; to: HsvDelta }): Entry[][] {
+  const { frames, from, to } = opts;
+  const closed = opts.closed ?? false;
+  const a = dz(from);
+  const b = dz(to);
+  return frames.map((f, k) => {
+    const t = tFor(k, frames.length, closed);
+    const dh = lerp(a.hue, b.hue, t);
+    const ds = lerp(a.sat, b.sat, t);
+    const dv = lerp(a.val, b.val, t);
+    const set = new Set(opts.indices ?? f.palette.map((_, i) => i));
+    const pal = copy(f.palette);
+    for (const i of set) {
+      const e = f.palette[i];
+      if (!e) continue;
+      const hsv = rgbToHsv(e.r, e.g, e.b);
+      const rgb = hsvToRgb(hsv.h + dh, hsv.s * ds, hsv.v * dv);
+      pal[i] = { ...e, r: rgb.r, g: rgb.g, b: rgb.b };
+    }
+    return pal;
+  });
+}
+
+/** Fade existing frames toward a colour, each frame transformed in place. */
+export function interpolateOver(opts: OverFramesOptions & { to: Entry }): Entry[][] {
+  const { frames, to } = opts;
+  const closed = opts.closed ?? false;
+  return frames.map((f, k) => {
+    const t = tFor(k, frames.length, closed);
+    const set = opts.indices ?? f.palette.map((_, i) => i);
+    const pal = copy(f.palette);
+    for (const i of set) {
+      const e = f.palette[i];
+      if (!e) continue;
+      pal[i] = {
+        ...e,
+        r: Math.round(lerp(e.r, to.r, t)),
+        g: Math.round(lerp(e.g, to.g, t)),
+        b: Math.round(lerp(e.b, to.b, t)),
+        a: Math.round(lerp(e.a, to.a, t)),
+      };
+    }
+    return pal;
+  });
+}

@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   clampView,
   createView,
+  DEFAULT_MAX_SCALE,
+  DEFAULT_MIN_SCALE,
+  OVERSCROLL_FRACTION,
   fitView,
   hitTest,
   panBy,
@@ -232,20 +235,28 @@ describe('fitView', () => {
 // ---------------------------------------------------------------------------
 
 describe('clampView', () => {
-  it('centres an image smaller than the viewport', () => {
-    const view: ViewState = { originX: 999, originY: -999, scale: 1 };
-    const clamped = clampView(view, 50, 50, 200, 200);
-    // viewW = 200/1 = 200 >= imageW(50) -> centred: (50-200)/2 = -75
-    expect(clamped.originX).toBeCloseTo(-75, 9);
-    expect(clamped.originY).toBeCloseTo(-75, 9);
+  it('bounds an image smaller than the viewport by the overscroll allowance', () => {
+    // viewW = 200/1 = 200, image 50 wide. The window may run half a viewport
+    // past either side of the legal range, and no further.
+    const slack = 200 * OVERSCROLL_FRACTION;
+    const far = clampView({ originX: 999, originY: 999, scale: 1 }, 50, 50, 200, 200);
+    expect(far.originX).toBeCloseTo(50 - 200 + slack, 9);
+    const near = clampView({ originX: -999, originY: -999, scale: 1 }, 50, 50, 200, 200);
+    expect(near.originX).toBeCloseTo(-slack, 9);
+    // Some of the image is still on screen at both extremes.
+    expect(far.originX).toBeLessThan(50);
+    expect(near.originX + 200).toBeGreaterThan(0);
   });
 
-  it('keeps the viewport fully inside a larger image', () => {
-    const view: ViewState = { originX: -50, originY: 99999, scale: 2 };
-    const clamped = clampView(view, 1000, 1000, 200, 200);
-    // viewW = 200/2 = 100 < imageW(1000) -> origin clamped to [0, 900]
-    expect(clamped.originX).toBe(0);
-    expect(clamped.originY).toBe(900);
+  it('allows a bounded overscroll on a larger image', () => {
+    // viewW = 200/2 = 100 image px, so the legal range is [0, 900] and the
+    // allowance is half a viewport, 50, either side.
+    const slack = 100 * OVERSCROLL_FRACTION;
+    const clamped = clampView({ originX: -50, originY: 99999, scale: 2 }, 1000, 1000, 200, 200);
+    expect(clamped.originX).toBe(-50);
+    expect(clamped.originY).toBe(900 + slack);
+    const beyond = clampView({ originX: -99999, originY: 0, scale: 2 }, 1000, 1000, 200, 200);
+    expect(beyond.originX).toBe(-slack);
   });
 
   it('leaves an already-valid origin untouched', () => {
@@ -517,5 +528,64 @@ describe('render()', () => {
       const deviceLineWidth = ctx.lineWidth * strokeCall.matrix[0];
       expect(deviceLineWidth).toBeCloseTo(dpr, 9);
     }
+  });
+});
+
+describe('zooming never cancels itself (spicyjpeg, 2026-09-04)', () => {
+  // Reported as two separate symptoms: "in fit-to-window mode it was impossible
+  // to zoom out past 300%" and "in 1:1 mode I couldn't zoom in past 100%".
+  // One cause: Math.round plus a 1.2 factor is a no-op below the snap
+  // granularity, so the scale returns to where it started.
+  const at = (scale: number, factor: number): number =>
+    zoomAt({ originX: 0, originY: 0, scale }, 100, 100, factor).scale;
+
+  it('zooms out from 3x instead of rounding back to 3x', () => {
+    expect(at(3, 1 / 1.2)).toBeLessThan(3);
+    expect(at(3, 1 / 1.2)).toBe(2);
+  });
+
+  it('zooms in from 1x instead of rounding back to 1x', () => {
+    expect(at(1, 1.2)).toBeGreaterThan(1);
+    expect(at(1, 1.2)).toBe(2);
+  });
+
+  it('leaves a step that already moves alone', () => {
+    // 8 * 1.2 = 9.6 -> 10, a real move, so no stepping correction applies.
+    expect(at(8, 1.2)).toBe(10);
+  });
+
+  it('still moves out of a fractional fit scale', () => {
+    expect(at(3.4, 1 / 1.2)).toBe(3);
+    expect(at(3, 1 / 1.2)).toBe(2);
+  });
+
+  it('drops below 1x smoothly, where there is no snapping', () => {
+    expect(at(1, 1 / 1.2)).toBeCloseTo(1 / 1.2, 5);
+  });
+
+  it('never runs past the configured bounds', () => {
+    const hi = zoomAt({ originX: 0, originY: 0, scale: 64 }, 0, 0, 1.2).scale;
+    expect(hi).toBeLessThanOrEqual(DEFAULT_MAX_SCALE);
+    const lo = zoomAt({ originX: 0, originY: 0, scale: DEFAULT_MIN_SCALE }, 0, 0, 1 / 1.2).scale;
+    expect(lo).toBeGreaterThanOrEqual(DEFAULT_MIN_SCALE);
+  });
+});
+
+describe('panning past the edges', () => {
+  it('lets a corner pixel be brought inboard', () => {
+    // 100x100 image at 4x in a 200x200 window: the viewport covers 50 image
+    // pixels, so without overscroll the origin stops at 50 and pixel (99,99)
+    // sits under the window edge forever.
+    const v = clampView({ originX: 999, originY: 999, scale: 4 }, 100, 100, 200, 200);
+    expect(v.originX).toBeGreaterThan(50);
+    expect(v.originY).toBeGreaterThan(50);
+  });
+
+  it('still refuses to lose the image entirely', () => {
+    const v = clampView({ originX: 1e6, originY: 1e6, scale: 4 }, 100, 100, 200, 200);
+    // Viewport is 50 image px wide; the far edge must still overlap the image.
+    expect(v.originX).toBeLessThan(100);
+    const back = clampView({ originX: -1e6, originY: -1e6, scale: 4 }, 100, 100, 200, 200);
+    expect(back.originX).toBeGreaterThan(-50);
   });
 });

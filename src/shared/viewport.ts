@@ -145,6 +145,26 @@ export function hitTest(
  * under (sx, sy) stays under (sx, sy) after the zoom. `factor` multiplies
  * the current scale (e.g. 1.2 to zoom in, 1/1.2 to zoom out).
  */
+/**
+ * Snap the scale to an integer WITHOUT ever cancelling the requested move.
+ *
+ * The bug this exists for, reported by spicyjpeg 2026-09-04: plain
+ * `Math.round` plus a 1.2 zoom factor is a no-op wherever the step is smaller
+ * than the snap granularity. From 3x, zooming out gives 2.5, which rounds
+ * straight back to 3 - "impossible to zoom out past 300%". From 1x, zooming in
+ * gives 1.2, which rounds back to 1 - "couldn't zoom in past 100%". Both
+ * symptoms, one cause, and the clamp was innocent.
+ */
+function stepScale(from: number, factor: number, opts?: ViewportOptions): number {
+  const target = resolveScale(from * factor, opts);
+  if (target !== from || factor === 1) return target;
+  const snap = opts?.snapIntegerZoom ?? true;
+  if (!snap) return target;
+  // The snap ate the move. Take a whole step in the direction asked for.
+  const stepped = factor > 1 ? Math.floor(from) + 1 : from - 1;
+  return resolveScale(stepped, opts);
+}
+
 export function zoomAt(
   view: ViewState,
   sx: number,
@@ -153,7 +173,7 @@ export function zoomAt(
   opts?: ViewportOptions,
 ): ViewState {
   const before = toImage(view, sx, sy);
-  const scale = resolveScale(view.scale * factor, opts);
+  const scale = stepScale(view.scale, factor, opts);
   return {
     scale,
     originX: before.x - sx / scale,
@@ -179,6 +199,18 @@ export function panBy(view: ViewState, dxScreen: number, dyScreen: number): View
  * than the viewport in a dimension, centre it; otherwise keep the viewport
  * fully inside the image so you can't pan the image entirely off-screen.
  */
+/**
+ * Keep the image reachable without pinning it to the viewport edges.
+ *
+ * Hard-clamping the viewport inside the image makes a corner pixel impossible
+ * to inspect: at high zoom the thing you want sits under the window edge and
+ * there is nowhere to push it. So overscroll is allowed up to
+ * `OVERSCROLL_FRACTION` of the viewport in each direction, which is enough to
+ * bring any corner to the middle of the screen, and the image can still never
+ * be pushed entirely out of sight.
+ */
+export const OVERSCROLL_FRACTION = 0.5;
+
 export function clampView(
   view: ViewState,
   imageW: number,
@@ -188,11 +220,11 @@ export function clampView(
 ): ViewState {
   const viewW = cssW / view.scale;
   const viewH = cssH / view.scale;
+  const slackX = viewW * OVERSCROLL_FRACTION;
+  const slackY = viewH * OVERSCROLL_FRACTION;
 
-  const originX =
-    viewW >= imageW ? (imageW - viewW) / 2 : Math.max(0, Math.min(imageW - viewW, view.originX));
-  const originY =
-    viewH >= imageH ? (imageH - viewH) / 2 : Math.max(0, Math.min(imageH - viewH, view.originY));
+  const originX = Math.max(-slackX, Math.min(imageW - viewW + slackX, view.originX));
+  const originY = Math.max(-slackY, Math.min(imageH - viewH + slackY, view.originY));
 
   return { ...view, originX, originY };
 }
