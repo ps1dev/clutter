@@ -44,6 +44,12 @@
       <div id="palette-grid"><canvas id="palette-canvas"></canvas></div>
       <div class="note" id="palette-empty">No image loaded.</div>
 
+      <div id="gen-buttons">
+        <button id="open-cycle">Colour cycle&hellip;</button>
+        <button id="open-hsb">HSB ramp&hellip;</button>
+        <button id="open-fade">Fade&hellip;</button>
+      </div>
+
       <div id="entry-editor" class="hidden">
         <div class="slider-row">
           <label for="e-r">R</label>
@@ -70,63 +76,8 @@
         <p class="warn-text hidden" id="e-diagnose"></p>
       </div>
 
-      <h2>Generators</h2>
 
-      <div class="generator">
-        <h3>Colour cycle</h3>
-        <div class="row">
-          <label>lo <input type="number" id="g-cycle-lo" min="0" value="0"></label>
-          <label>hi <input type="number" id="g-cycle-hi" min="0" value="0"></label>
-        </div>
-        <div class="row">
-          <label>direction
-            <select id="g-cycle-dir">
-              <option value="forward">forward</option>
-              <option value="backward">backward</option>
-            </select>
-          </label>
-        </div>
-        <div class="row">
-          <label>steps <input type="number" id="g-cycle-steps" min="1" value="1"></label>
-        </div>
-        <div class="note" id="g-cycle-distinct"></div>
-        <button id="g-cycle-run">Generate</button>
-        <div class="note" id="g-cycle-stalled"></div>
-      </div>
 
-      <div class="generator">
-        <h3>HSB ramp</h3>
-        <div class="row">
-          <label>hue from <input type="number" id="g-hsb-hue-from" step="1" value="0"></label>
-          <label>hue to <input type="number" id="g-hsb-hue-to" step="1" value="360"></label>
-        </div>
-        <div class="row">
-          <label>saturation &times; <input type="number" id="g-hsb-sat" min="0" step="0.05" value="1"></label>
-          <label>value &times; <input type="number" id="g-hsb-val" min="0" step="0.05" value="1"></label>
-        </div>
-        <div class="row">
-          <label>steps <input type="number" id="g-hsb-steps" min="1" value="12"></label>
-          <label><input type="checkbox" id="g-hsb-closed"> closed</label>
-        </div>
-        <div class="note" id="g-hsb-distinct"></div>
-        <button id="g-hsb-run">Generate</button>
-        <div class="note" id="g-hsb-stalled"></div>
-      </div>
-
-      <div class="generator">
-        <h3>Fade to colour</h3>
-        <div class="row">
-          <label>target <input type="color" id="g-fade-color" value="#000000"></label>
-          <label>alpha <input type="number" id="g-fade-alpha" min="0" max="255" step="1" value="255"></label>
-        </div>
-        <div class="row">
-          <label>steps <input type="number" id="g-fade-steps" min="1" value="8"></label>
-          <label><input type="checkbox" id="g-fade-closed"> closed</label>
-        </div>
-        <div class="note" id="g-fade-distinct"></div>
-        <button id="g-fade-run">Generate</button>
-        <div class="note" id="g-fade-stalled"></div>
-      </div>
     </div>
   </div>
 
@@ -152,6 +103,68 @@
     <span id="s-msg"></span>
   </div>
 </div>
+
+<dialog id="dlg-cycle" class="generator-dialog">
+  <form method="dialog"><button class="dlg-close" aria-label="Close">&times;</button></form>
+  <h3>Colour cycle</h3>
+        <div class="row">
+          <label>lo <input type="number" id="g-cycle-lo" min="0" value="0"></label>
+          <label>hi <input type="number" id="g-cycle-hi" min="0" value="0"></label>
+        </div>
+        <div class="row">
+          <label>direction
+            <select id="g-cycle-dir">
+              <option value="forward">forward</option>
+              <option value="backward">backward</option>
+            </select>
+          </label>
+        </div>
+        <div class="row">
+          <label>steps <input type="number" id="g-cycle-steps" min="1" value="1"></label>
+        </div>
+        <div class="note" id="g-cycle-distinct"></div>
+        <button id="g-cycle-run">Generate</button>
+        <div class="note" id="g-cycle-stalled"></div>
+
+</dialog>
+
+<dialog id="dlg-hsb" class="generator-dialog">
+  <form method="dialog"><button class="dlg-close" aria-label="Close">&times;</button></form>
+  <h3>HSB ramp</h3>
+        <div class="row">
+          <label>hue from <input type="number" id="g-hsb-hue-from" step="1" value="0"></label>
+          <label>hue to <input type="number" id="g-hsb-hue-to" step="1" value="360"></label>
+        </div>
+        <div class="row">
+          <label>saturation &times; <input type="number" id="g-hsb-sat" min="0" step="0.05" value="1"></label>
+          <label>value &times; <input type="number" id="g-hsb-val" min="0" step="0.05" value="1"></label>
+        </div>
+        <div class="row">
+          <label>steps <input type="number" id="g-hsb-steps" min="1" value="12"></label>
+          <label><input type="checkbox" id="g-hsb-closed"> closed</label>
+        </div>
+        <div class="note" id="g-hsb-distinct"></div>
+        <button id="g-hsb-run">Generate</button>
+        <div class="note" id="g-hsb-stalled"></div>
+
+</dialog>
+
+<dialog id="dlg-fade" class="generator-dialog">
+  <form method="dialog"><button class="dlg-close" aria-label="Close">&times;</button></form>
+  <h3>Fade to colour</h3>
+        <div class="row">
+          <label>target <input type="color" id="g-fade-color" value="#000000"></label>
+          <label>alpha <input type="number" id="g-fade-alpha" min="0" max="255" step="1" value="255"></label>
+        </div>
+        <div class="row">
+          <label>steps <input type="number" id="g-fade-steps" min="1" value="8"></label>
+          <label><input type="checkbox" id="g-fade-closed"> closed</label>
+        </div>
+        <div class="note" id="g-fade-distinct"></div>
+        <button id="g-fade-run">Generate</button>
+        <div class="note" id="g-fade-stalled"></div>
+
+</dialog>
 
 <script type="module" src="./src/main.ts"></script>
 </body>

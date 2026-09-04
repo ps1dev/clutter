@@ -176,10 +176,15 @@ describe('generating and playing', () => {
     const widthBefore = await page.evaluate(
       () => (document.getElementById('strip-canvas') as HTMLCanvasElement).clientWidth,
     );
+    // The generators live in modals now, so the dialog has to be open before
+    // its inputs are reachable.
+    await page.click('#open-cycle');
+    expect(await page.locator('#dlg-cycle').isVisible()).toBe(true);
     await page.fill('#g-cycle-lo', '0');
     await page.fill('#g-cycle-hi', '7');
     await page.fill('#g-cycle-steps', '8');
     await page.click('#g-cycle-run');
+    await page.evaluate(() => (document.getElementById('dlg-cycle') as HTMLDialogElement).close());
     expect(await page.textContent('#s-frames')).toBe('9 frames');
     const widthAfter = await page.evaluate(
       () => (document.getElementById('strip-canvas') as HTMLCanvasElement).clientWidth,

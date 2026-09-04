@@ -126,6 +126,25 @@ const gFadeDistinct = $('g-fade-distinct');
 const gFadeRun = $<HTMLButtonElement>('g-fade-run');
 const gFadeStalled = $('g-fade-stalled');
 
+const dlgCycle = $<HTMLDialogElement>('dlg-cycle');
+const dlgHsb = $<HTMLDialogElement>('dlg-hsb');
+const dlgFade = $<HTMLDialogElement>('dlg-fade');
+
+// The generators moved out of the sidebar into modals: with the palette grid,
+// the buttons and the entry editor all in one scrolling column there were two
+// nested scrollbars, and the entry editor - the thing you use most - was the
+// one that scrolled off.
+for (const [btn, dlg] of [
+  ['open-cycle', dlgCycle],
+  ['open-hsb', dlgHsb],
+  ['open-fade', dlgFade],
+] as const) {
+  $<HTMLButtonElement>(btn).addEventListener('click', () => {
+    updateGeneratorNotes();
+    dlg.showModal();
+  });
+}
+
 const statusFrames = $('s-frames');
 const statusLoop = $('s-loop');
 const statusHover = $('s-hover');
@@ -187,6 +206,7 @@ function sizeCanvas(c: HTMLCanvasElement, cssW: number, cssH: number): void {
 }
 
 let dragging: { x: number; y: number } | null = null;
+let dragMoved = false;
 let rafId: number | null = null;
 let playAnchorTime = 0;
 let playAnchorTick = 0;
@@ -402,6 +422,64 @@ formatSelect.addEventListener('change', () => {
 
 let lastClickedIndex: number | null = null;
 let cycleHighlight: [number, number] | null = null;
+
+/**
+ * Keyboard shortcuts.
+ *
+ * Gated on the event target: a number input in the generators is a text field
+ * and left/right there mean cursor movement, not frame navigation. Checking the
+ * target rather than a mode flag means there is no state to get out of sync.
+ */
+function typingInAField(t: EventTarget | null): boolean {
+  const el = t as HTMLElement | null;
+  if (!el || !el.tagName) return false;
+  const tag = el.tagName.toLowerCase();
+  return tag === 'input' || tag === 'textarea' || tag === 'select' || el.isContentEditable;
+}
+
+window.addEventListener('keydown', (e) => {
+  if (typingInAField(e.target)) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (!state.animation) return;
+  const last = state.animation.frames.length - 1;
+
+  switch (e.key) {
+    case ' ':
+      if (state.playing) stopPlayback();
+      else startPlayback();
+      break;
+    case 'ArrowLeft':
+      stopPlayback();
+      selectFrame(Math.max(0, state.currentFrame - 1));
+      break;
+    case 'ArrowRight':
+      stopPlayback();
+      selectFrame(Math.min(last, state.currentFrame + 1));
+      break;
+    case 'Home':
+      stopPlayback();
+      selectFrame(0);
+      break;
+    case 'End':
+      stopPlayback();
+      selectFrame(last);
+      break;
+    case 'Insert':
+      stopPlayback();
+      state.animation = duplicateFrame(state.animation, state.currentFrame);
+      selectFrame(Math.min(state.animation.frames.length - 1, state.currentFrame + 1));
+      break;
+    case 'Delete':
+      stopPlayback();
+      if (state.animation.frames.length <= 1) return;
+      state.animation = deleteFrame(state.animation, state.currentFrame);
+      selectFrame(Math.min(state.animation.frames.length - 1, state.currentFrame));
+      break;
+    default:
+      return;
+  }
+  e.preventDefault();
+});
 
 function paletteContainerWidth(): number {
   const w = paletteGrid.clientWidth;
@@ -849,7 +927,22 @@ function clampCurrentView(): void {
 canvas.addEventListener('pointerdown', (e) => {
   if (!state.animation) return;
   dragging = { x: e.clientX, y: e.clientY };
+  dragMoved = false;
   canvas.setPointerCapture(e.pointerId);
+});
+
+/**
+ * Clicking a pixel selects the palette entry that pixel uses. Suppressed after
+ * a pan, or every drag would end by silently changing the selection.
+ */
+canvas.addEventListener('click', (e) => {
+  if (dragMoved || !state.animation || !state.indices) return;
+  const rect = canvas.getBoundingClientRect();
+  const hit = hitTest(state.view, state.imageW, state.imageH, e.clientX - rect.left, e.clientY - rect.top);
+  if (!hit) return;
+  const idx = state.indices[hit.y * state.imageW + hit.x];
+  if (idx === undefined) return;
+  onSwatchClick(idx, e);
 });
 
 canvas.addEventListener('pointermove', (e) => {
@@ -861,6 +954,7 @@ canvas.addEventListener('pointermove', (e) => {
     const dx = e.clientX - dragging.x;
     const dy = e.clientY - dragging.y;
     dragging = { x: e.clientX, y: e.clientY };
+    if (Math.abs(dx) > 0 || Math.abs(dy) > 0) dragMoved = true;
     state.view = panBy(state.view, dx, dy);
     clampCurrentView();
     draw();

@@ -137,11 +137,17 @@ input[type='range'] {
   display: none;
 }
 
+/* Column, not a scroller. The palette is the only thing that scrolls; the
+   generator buttons and the entry editor are pinned. The sidebar used to
+   scroll as well, which put a scrollbar inside a scrollbar. */
 #right {
   background: var(--panel);
   border-left: 1px solid var(--line);
-  overflow-y: auto;
   padding: 8px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 #right h2 {
   font-size: 11px;
@@ -188,7 +194,8 @@ input[type='range'] {
    scrollLeft/scrollTop. */
 #palette-grid {
   margin-bottom: 6px;
-  max-height: 46vh;
+  flex: 1 1 auto;
+  min-height: 60px;
   overflow: auto;
 }
 #palette-canvas {
@@ -356,4 +363,48 @@ input[type='range'] {
 }
 #status-bar .grow {
   flex: 1;
+}
+
+#gen-buttons {
+  display: flex;
+  gap: 4px;
+  flex: 0 0 auto;
+  margin-bottom: 8px;
+}
+#gen-buttons button {
+  flex: 1;
+}
+#entry-editor {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+.generator-dialog {
+  background: var(--panel);
+  color: inherit;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px 14px 14px;
+  min-width: 300px;
+  font: inherit;
+}
+.generator-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+.generator-dialog h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--dim);
+}
+.generator-dialog .dlg-close {
+  float: right;
+  border: none;
+  background: none;
+  color: var(--dim);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
 }
