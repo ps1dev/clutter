@@ -33,10 +33,12 @@ async function run(fixture, hi) {
   await page.setInputFiles('#file-png', resolve(ROOT, 'test/fixtures', fixture));
   await page.waitForFunction(() => (document.querySelector('#s-msg')?.textContent ?? '').length > 0);
   await page.click('#btn-fit');
+  await page.click('#open-cycle');
   await page.fill('#g-cycle-lo', '0');
   await page.fill('#g-cycle-hi', hi);
   await page.fill('#g-cycle-steps', '16');
   await page.click('#g-cycle-run');
+  await page.evaluate(() => document.getElementById('dlg-cycle').close());
 
   const elements = await page.evaluate(() => document.getElementsByTagName('*').length);
   const fps = await page.evaluate(async () => {
