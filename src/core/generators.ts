@@ -14,6 +14,7 @@
 
 import type { Entry } from '../shared/color.js';
 import { hsvToRgb, rgbToHsv } from '../shared/hsv.js';
+import { resolveIndex, type EdgeMode } from './transforms.js';
 
 const copy = (p: Entry[]): Entry[] => p.map((e) => ({ ...e }));
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
@@ -167,6 +168,13 @@ export interface CycleEntriesOptions {
   increment?: number;
   steps?: number;
   /**
+   * `wrap` rotates colours off one end back onto the other, which is the
+   * classic cycle. `clamp` lets them fall off, and the slots vacated at the
+   * other end repeat their neighbour - the same rule the phase shift uses on
+   * the time axis, shared so the two cannot drift apart.
+   */
+  edge?: EdgeMode;
+  /**
    * Skip step 0, which is the base palette unchanged.
    *
    * The frame you started from already exists in the animation, so emitting it
@@ -190,6 +198,9 @@ export function cycleEntries(opts: CycleEntriesOptions): Entry[][] {
   const len = idx.length;
   if (len <= 1) return [copy(base)];
   const inc = opts.increment ?? (dir === 'forward' ? 1 : -1);
+  const edge = opts.edge ?? 'wrap';
+  // Only meaningful for detecting a step that does not move; the actual
+  // sampling below goes through resolveIndex so the edge mode applies.
   const shiftAt = (k: number): number => (((-Math.round(k * inc) % len) + len) % len);
   const steps = Math.max(1, opts.steps ?? (opts.skipFirst ? len - 1 : len));
 
@@ -221,7 +232,7 @@ export function cycleEntries(opts: CycleEntriesOptions): Entry[][] {
     // error term.
     const pal = copy(base);
     for (let i = 0; i < len; i++) {
-      const src = (((i - Math.round(k * inc)) % len) + len) % len;
+      const src = resolveIndex(i - Math.round(k * inc), len, edge);
       pal[idx[i]] = { ...base[idx[src]] };
     }
     out.push(pal);

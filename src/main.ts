@@ -59,6 +59,13 @@ import {
 } from './core/generators.js';
 import { paletteLut, composeInto, createImageBuffer } from './core/compose.js';
 import {
+  copyFromIndex,
+  phaseShift,
+  resolveSelection,
+  setForAllFrames,
+  type EdgeMode,
+} from './core/transforms.js';
+import {
   drawFrameStrip,
   drawPaletteGrid,
   frameHitTest,
@@ -139,6 +146,15 @@ const gFadeDistinct = $('g-fade-distinct');
 const gFadeRun = $<HTMLButtonElement>('g-fade-run');
 const gFadeStalled = $('g-fade-stalled');
 
+const dlgCopyFrom = $<HTMLDialogElement>('dlg-copyfrom');
+const cfIndex = $<HTMLInputElement>('cf-index');
+const cfNote = $('cf-note');
+const dlgPhase = $<HTMLDialogElement>('dlg-phase');
+const phShift = $<HTMLInputElement>('ph-shift');
+const phInc = $<HTMLInputElement>('ph-inc');
+const phWrap = $<HTMLInputElement>('ph-wrap');
+const phNote = $('ph-note');
+const gCycleWrap = $<HTMLInputElement>('g-cycle-wrap');
 const dlgDiscard = $<HTMLDialogElement>('dlg-discard');
 const discardWhat = $('discard-what');
 const discardYes = $<HTMLButtonElement>('discard-yes');
@@ -592,6 +608,18 @@ window.addEventListener('keydown', (e) => {
   const last = state.animation.frames.length - 1;
 
   switch (e.key) {
+    case 'Escape':
+      // Clearing the span has to have a keyboard route. Shift-clicking the
+      // timeline without dragging is meant to do it too, but that path is a
+      // subtle no-movement drag and I could not get it to fire reliably under
+      // synthetic pointer events, so it is not something to rely on or to
+      // claim works.
+      if (frameSpan) {
+        frameSpan = null;
+        timeline.selection = null;
+        refreshAll();
+      }
+      break;
     case ' ':
       if (state.playing) stopPlayback();
       else startPlayback();
@@ -1048,8 +1076,12 @@ function buildCycleRun(base: Entry[]) {
   const indices = [...state.selected].filter((i) => i >= 0 && i < base.length).sort((a, b) => a - b);
   const increment = Number(gCycleInc.value) || 0;
   const steps = Math.max(1, Math.round(Number(gCycleSteps.value)));
-  const params = { indices, increment, steps, skipFirst: true };
-  return { params, frames: cycleEntries({ base, indices, increment, steps, skipFirst: true }) };
+  const edge: EdgeMode = gCycleWrap.checked ? 'wrap' : 'clamp';
+  const params = { indices, increment, steps, edge, skipFirst: true };
+  return {
+    params,
+    frames: cycleEntries({ base, indices, increment, steps, edge, skipFirst: true }),
+  };
 }
 
 /**
@@ -1166,6 +1198,12 @@ function updateGeneratorNotes(): void {
   // Generate button inside put the explanation one click away from the thing
   // it explains.
   $<HTMLButtonElement>('open-cycle').disabled = cycleOff;
+  // The transform tools need an animation and nothing else: they fall back to
+  // "everything" on either axis, which is the documented behaviour, not a
+  // degenerate case to block.
+  for (const id of ['run-setall', 'open-copyfrom', 'open-phase']) {
+    $<HTMLButtonElement>(id).disabled = !state.animation;
+  }
   $<HTMLButtonElement>('open-cycle').title = why;
   gCycleRun.disabled = cycleOff;
   // The reason rides on the button as a tooltip as well as in the panel text:
@@ -1264,6 +1302,88 @@ gFadeRun.addEventListener('click', () => {
   const stalled = countStalledFrames(fmt, generated);
   gFadeStalled.textContent = `${stalled} stalled frame${stalled === 1 ? '' : 's'} in this run`;
   refreshAll();
+});
+
+// ---------------------------------------------------------------------------
+// Frame transforms
+//
+// These three edit existing frames rather than making new ones, so they share
+// core/transforms.ts rather than generators.ts. The selection resolution and
+// the wrap-or-hold edge rule live there; everything here is wiring and a
+// sentence saying what happened.
+// ---------------------------------------------------------------------------
+
+/** The (frames, entries) the transform tools act on right now. */
+function currentSelection() {
+  const anim = state.animation!;
+  return resolveSelection(
+    anim.frames.length,
+    anim.paletteSize,
+    frameSpan,
+    state.selected.size ? state.selected : null,
+  );
+}
+
+function describeSelection(): string {
+  const anim = state.animation;
+  if (!anim) return '';
+  const sel = currentSelection();
+  const f = frameSpan ? `${sel.frames.length} selected frames` : `all ${sel.frames.length} frames`;
+  const e = state.selected.size ? `${sel.entries.length} selected entries` : `all ${sel.entries.length} entries`;
+  return `${e} across ${f}`;
+}
+
+/** Apply new palettes to the animation, keeping every frame's own hold. */
+function applyPalettes(next: Entry[][], what: string): void {
+  if (!state.animation) return;
+  const frames = state.animation.frames.map((f, i) => ({ ...f, palette: next[i] ?? f.palette }));
+  state.animation = { ...state.animation, frames };
+  setStatus(`${what}: ${describeSelection()}.`);
+  refreshAll();
+}
+
+const palettesOf = (): Entry[][] => state.animation!.frames.map((f) => f.palette);
+
+$<HTMLButtonElement>('run-setall').addEventListener('click', () => {
+  if (!state.animation) return;
+  const sel = currentSelection();
+  const source = state.animation.frames[state.currentFrame].palette;
+  applyPalettes(setForAllFrames(palettesOf(), sel, source), 'Set for all frames');
+});
+
+$<HTMLButtonElement>('open-copyfrom').addEventListener('click', () => {
+  if (!state.animation) return;
+  cfIndex.max = String(state.animation.paletteSize - 1);
+  cfNote.textContent = `Copies that entry onto ${describeSelection()}. Read per frame, so an animated source stays animated.`;
+  dlgCopyFrom.showModal();
+});
+
+$<HTMLButtonElement>('cf-run').addEventListener('click', (ev) => {
+  ev.preventDefault();
+  if (!state.animation) return;
+  const src = Math.max(0, Math.min(state.animation.paletteSize - 1, Math.round(Number(cfIndex.value))));
+  cfIndex.value = String(src);
+  dlgCopyFrom.close();
+  applyPalettes(copyFromIndex(palettesOf(), currentSelection(), src), `Copied entry ${src} onto`);
+});
+
+$<HTMLButtonElement>('open-phase').addEventListener('click', () => {
+  if (!state.animation) return;
+  phNote.textContent = `Shifts ${describeSelection()} along the timeline.`;
+  dlgPhase.showModal();
+});
+
+$<HTMLButtonElement>('ph-run').addEventListener('click', (ev) => {
+  ev.preventDefault();
+  if (!state.animation) return;
+  const shift = Math.round(Number(phShift.value)) || 0;
+  const increment = Number(phInc.value) || 0;
+  const edge: EdgeMode = phWrap.checked ? 'wrap' : 'clamp';
+  dlgPhase.close();
+  applyPalettes(
+    phaseShift(palettesOf(), currentSelection(), { shift, increment, edge }),
+    `Phase shifted by ${shift}${increment ? ` +${increment}/entry` : ''}`,
+  );
 });
 
 // ---------------------------------------------------------------------------

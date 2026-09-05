@@ -434,3 +434,13 @@ input[type='range'] {
 .warn-field {
   border-color: var(--warn);
 }
+
+#gen-buttons2 {
+  display: flex;
+  gap: 4px;
+  flex: 0 0 auto;
+  margin-bottom: 8px;
+}
+#gen-buttons2 button {
+  flex: 1;
+}

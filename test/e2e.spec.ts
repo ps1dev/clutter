@@ -268,6 +268,88 @@ describe('generating and playing', () => {
   });
 });
 
+describe('the frame transforms', () => {
+  it('set-for-all writes one colour across every frame, and copy-from stays per frame', async () => {
+    const p4 = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+    await p4.goto(`file://${DIST}`);
+    await p4.waitForSelector('#canvas');
+    await p4.setInputFiles('#file-png', resolve(ROOT, 'test/fixtures/indexed8-trns.png'));
+    await p4.waitForSelector('#dlg-format[open]');
+    await p4.click('#format-apply');
+    await p4.waitForFunction(() => (document.querySelector('#s-msg')?.textContent ?? '').length > 0);
+
+    // Build four frames that differ, by cycling.
+    const swatch = (n: number) =>
+      p4.evaluate((i) => {
+        const c = document.getElementById('palette-canvas') as HTMLCanvasElement;
+        const step = 34;
+        const cols = Math.max(1, Math.floor((c.clientWidth + 2) / step));
+        return { x: (i % cols) * step + 16, y: Math.floor(i / cols) * step + 16 };
+      }, n);
+    await p4.locator('#palette-canvas').click({ position: await swatch(0) });
+    await p4.locator('#palette-canvas').click({ position: await swatch(5), modifiers: ['Shift'] });
+    await p4.click('#open-cycle');
+    await p4.fill('#g-cycle-steps', '3');
+    await p4.click('#g-cycle-run');
+    await p4.evaluate(() => (document.getElementById('dlg-cycle') as HTMLDialogElement).close());
+    expect(await p4.textContent('#s-frames')).toBe('4 frames');
+
+    // Sample entry 1 across all four frames from the PALETTE GRID, stepping
+    // with the keyboard. The timeline thumbnail was the obvious source and is
+    // a bad oracle: twenty entries in a 32px lane is a 1.6px band, so which
+    // entry a sampled pixel lands on is a rounding accident.
+    const sampleEntry1 = async (): Promise<string[]> => {
+      // Click the status bar, NOT the viewport: clicking a pixel selects that
+      // pixel's palette entry, so a sampler that focused the canvas was
+      // destroying the selection it was about to measure the effect of.
+      await p4.click('#s-frames');
+      await p4.keyboard.press('Home');
+      const out: string[] = [];
+      for (let f = 0; f < 4; f++) {
+        out.push(
+          await p4.evaluate(() => {
+            const c = document.getElementById('palette-canvas') as HTMLCanvasElement;
+            const g = c.getContext('2d')!;
+            const dpr = window.devicePixelRatio || 1;
+            const step = 34;
+            const cols = Math.max(1, Math.floor((c.clientWidth + 2) / step));
+            const x = Math.round(((1 % cols) * step + 16) * dpr);
+            const y = Math.round((Math.floor(1 / cols) * step + 16) * dpr);
+            const d = g.getImageData(x, y, 1, 1).data;
+            return `${d[0]},${d[1]},${d[2]},${d[3]}`;
+          }),
+        );
+        if (f < 3) await p4.keyboard.press('ArrowRight');
+      }
+      return out;
+    };
+
+    const before = await sampleEntry1();
+    expect(new Set(before).size).toBeGreaterThan(1);
+
+    // The cycle auto-selects the frames it made, so the span is 1..3 here and
+    // set-for-all must respect it: frame 0 keeps its own colours.
+    expect(await p4.textContent('#s-loop')).toMatch(/3 selected/);
+    await p4.click('#run-setall');
+    expect(await p4.textContent('#s-msg')).toMatch(/Set for all frames: .*3 selected frames/);
+    const spanned = await sampleEntry1();
+    expect(new Set(spanned.slice(1)).size).toBe(1);
+    expect(new Set(spanned).size).toBe(2);
+
+    // Clear the span with Escape and repeat: now it covers everything. This is
+    // the discriminator - a tool that ignored the span entirely would have
+    // passed the first assertion by accident.
+    await p4.click('#s-frames');
+    await p4.keyboard.press('Escape');
+    expect(await p4.textContent('#s-loop')).not.toMatch(/selected/);
+
+    await p4.click('#run-setall');
+    expect(await p4.textContent('#s-msg')).toMatch(/all 4 frames/);
+    expect(new Set(await sampleEntry1()).size).toBe(1);
+    await p4.close();
+  }, 60_000);
+});
+
 describe('the dirty flag', () => {
   it('guards an import over unsaved work, and a fresh load is not dirty', async () => {
     const p3 = await browser.newPage({ viewport: { width: 1400, height: 900 } });

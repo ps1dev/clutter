@@ -44,6 +44,11 @@
         <button id="open-hsb">HSB ramp&hellip;</button>
         <button id="open-fade">Fade&hellip;</button>
       </div>
+      <div id="gen-buttons2">
+        <button id="run-setall" title="Write the selected entries' colours into every selected frame">Set for all</button>
+        <button id="open-copyfrom">Copy from&hellip;</button>
+        <button id="open-phase">Phase shift&hellip;</button>
+      </div>
 
       <div id="entry-editor" class="hidden">
         <div class="slider-row">
@@ -108,6 +113,7 @@
           <label title="Signed places to shift per frame. 1 is one place a frame, 0.5 is one every two frames, negative runs backwards.">increment
             <input type="number" id="g-cycle-inc" step="0.05" value="1">
           </label>
+          <label title="Off: colours fall off the end and the vacated slots repeat their neighbour."><input type="checkbox" id="g-cycle-wrap" checked> wrap</label>
         </div>
         <div class="row">
           <label>steps <input type="number" id="g-cycle-steps" min="1" value="1"></label>
@@ -186,6 +192,30 @@
     <button id="discard-yes">Discard and import</button>
     <button id="discard-no">Cancel</button>
   </div>
+</dialog>
+
+<dialog id="dlg-copyfrom" class="generator-dialog">
+  <form method="dialog"><button class="dlg-close" aria-label="Close">&times;</button></form>
+  <h3>Copy from</h3>
+  <div class="row">
+    <label title="Read per frame, so a source colour that animates carries its animation across.">source entry <input type="number" id="cf-index" min="0" step="1" value="0"></label>
+  </div>
+  <p class="note" id="cf-note"></p>
+  <button id="cf-run">Copy</button>
+</dialog>
+
+<dialog id="dlg-phase" class="generator-dialog">
+  <form method="dialog"><button class="dlg-close" aria-label="Close">&times;</button></form>
+  <h3>Phase shift</h3>
+  <div class="row">
+    <label title="Frames to shift the first selected entry by. Negative shifts the other way.">shift <input type="number" id="ph-shift" step="1" value="1"></label>
+    <label title="Extra frames per selected entry, floored. Base 2 with increment 0.5 shifts the first two entries by 2 and the next two by 3.">increment <input type="number" id="ph-inc" step="0.05" value="0"></label>
+  </div>
+  <div class="row">
+    <label title="Off: entries shifted past the end are dropped and the vacated frames repeat their neighbour."><input type="checkbox" id="ph-wrap" checked> wrap</label>
+  </div>
+  <p class="note" id="ph-note"></p>
+  <button id="ph-run">Shift</button>
 </dialog>
 
 <script type="module" src="./src/main.ts"></script>
