@@ -135,7 +135,7 @@
         </div>
         <div class="row ps1-only" id="g-hsb-black-row">
           <label title="RGB5551 reads 0x0000 as fully transparent, so a generated colour that lands on solid black is replaced with this instead.">black becomes
-            <input type="color" id="g-hsb-black" value="#080808">
+            <input type="text" id="g-hsb-black" value="0x0421" size="8" spellcheck="false">
           </label>
         </div>
         <div class="note" id="g-hsb-distinct"></div>
@@ -157,7 +157,7 @@
         </div>
         <div class="row ps1-only" id="g-fade-black-row">
           <label title="RGB5551 reads 0x0000 as fully transparent, so a generated colour that lands on solid black is replaced with this instead.">black becomes
-            <input type="color" id="g-fade-black" value="#080808">
+            <input type="text" id="g-fade-black" value="0x0421" size="8" spellcheck="false">
           </label>
         </div>
         <div class="note" id="g-fade-distinct"></div>
@@ -177,6 +177,15 @@
   </div>
   <p class="note" id="format-dialog-note"></p>
   <button id="format-apply">Apply</button>
+</dialog>
+
+<dialog id="dlg-discard" class="generator-dialog">
+  <h3>Unsaved changes</h3>
+  <p>This animation has changes that are not saved anywhere. Importing <b id="discard-what"></b> will discard them.</p>
+  <div class="row">
+    <button id="discard-yes">Discard and import</button>
+    <button id="discard-no">Cancel</button>
+  </div>
 </dialog>
 
 <script type="module" src="./src/main.ts"></script>

@@ -309,3 +309,29 @@ describe('fractional cycle increment', () => {
     for (const pal of out) expect(pal).toEqual(base);
   });
 });
+
+describe('a fractional cycle never re-emits the frame it started from', () => {
+  const base = [A, B, C, D];
+  const key = (pal: Entry[]) => pal.map((e) => `${e.r},${e.g},${e.b}`).join('|');
+
+  it('skips the leading steps a small increment rounds to zero', () => {
+    // round(1 * 0.3) is 0, so a naive k=1 start emits a copy of the base.
+    for (const increment of [0.3, 0.25, 0.2, 0.1, -0.3, -0.15]) {
+      const out = cycleEntries({ base, indices: [0, 1, 2, 3], increment, steps: 6, skipFirst: true });
+      expect(key(out[0])).not.toBe(key(base));
+    }
+  });
+
+  it('still emits a mid-run return to the start, which is a real frame', () => {
+    // At 0.25 on four entries the cycle comes all the way round; that frame is
+    // part of the loop and must survive.
+    const out = cycleEntries({ base, indices: [0, 1, 2, 3], increment: 0.25, steps: 40, skipFirst: true });
+    expect(out.some((p) => key(p) === key(base))).toBe(true);
+  });
+
+  it('is unaffected at increment 1, where nothing needed skipping', () => {
+    const out = cycleEntries({ base, indices: [0, 1, 2, 3], increment: 1, steps: 3, skipFirst: true });
+    expect(key(out[0])).not.toBe(key(base));
+    expect(out).toHaveLength(3);
+  });
+});

@@ -429,3 +429,8 @@ input[type='range'] {
 .ps1-only.hidden {
   display: none;
 }
+
+/* A packed-value field that did not parse. Kept usable, just marked. */
+.warn-field {
+  border-color: var(--warn);
+}

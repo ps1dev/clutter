@@ -67,6 +67,8 @@ afterAll(async () => {
 
 async function importFixture(name: string, fmt?: string): Promise<void> {
   await page.setInputFiles('#file-png', resolve(ROOT, 'test/fixtures', name));
+  // Importing over unsaved work asks first.
+  if (await page.locator('#dlg-discard[open]').count()) await page.click('#discard-yes');
   // Import asks for the format first now.
   await page.waitForSelector('#dlg-format[open]', { timeout: 20_000 });
   if (fmt) await page.selectOption('#format-select', fmt);
@@ -264,6 +266,44 @@ describe('generating and playing', () => {
     expect(signatures.length).toBeGreaterThan(1);
     expect(new Set(signatures).size).toBeGreaterThan(1);
   });
+});
+
+describe('the dirty flag', () => {
+  it('guards an import over unsaved work, and a fresh load is not dirty', async () => {
+    const p3 = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+    await p3.goto(`file://${DIST}`);
+    await p3.waitForSelector('#canvas');
+    const load = async (): Promise<void> => {
+      await p3.setInputFiles('#file-png', resolve(ROOT, 'test/fixtures/indexed8-trns.png'));
+      await p3.waitForSelector('#dlg-format[open]');
+      await p3.click('#format-apply');
+      await p3.waitForFunction(() => (document.querySelector('#s-msg')?.textContent ?? '').length > 0);
+    };
+    await load();
+    // A load is not an edit. The marker in the status bar is the observable.
+    expect(await p3.textContent('#s-frame')).toBe('frame 0');
+
+    await p3.click('#f-duplicate');
+    expect(await p3.textContent('#s-frame')).toMatch(/\*/);
+
+    // Importing now must ask, and cancelling must leave the animation alone.
+    await p3.setInputFiles('#file-png', resolve(ROOT, 'test/fixtures/indexed4.png'));
+    await p3.waitForSelector('#dlg-discard[open]');
+    await p3.click('#discard-no');
+    expect(await p3.locator('#dlg-format[open]').count()).toBe(0);
+    expect(await p3.textContent('#s-frames')).toBe('2 frames');
+
+    // And confirming must go through and come back clean.
+    await p3.setInputFiles('#file-png', resolve(ROOT, 'test/fixtures/indexed4.png'));
+    await p3.waitForSelector('#dlg-discard[open]');
+    await p3.click('#discard-yes');
+    await p3.waitForSelector('#dlg-format[open]');
+    await p3.click('#format-apply');
+    await p3.waitForFunction(() => (document.querySelector('#s-msg')?.textContent ?? '').length > 0);
+    expect(await p3.textContent('#s-frames')).toBe('1 frame');
+    expect(await p3.textContent('#s-frame')).toBe('frame 0');
+    await p3.close();
+  }, 60_000);
 });
 
 describe('looping playback', () => {

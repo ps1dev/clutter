@@ -43,6 +43,8 @@
  *   let anything downstream reset it.
  */
 
+import { resolveMagnitude } from './zoom.js';
+
 export interface ViewState {
   /** Image-space X of the image pixel drawn at screen X=0. */
   originX: number;
@@ -146,23 +148,16 @@ export function hitTest(
  * the current scale (e.g. 1.2 to zoom in, 1/1.2 to zoom out).
  */
 /**
- * Snap the scale to an integer WITHOUT ever cancelling the requested move.
- *
- * The bug this exists for, reported by spicyjpeg 2026-09-04: plain
- * `Math.round` plus a 1.2 zoom factor is a no-op wherever the step is smaller
- * than the snap granularity. From 3x, zooming out gives 2.5, which rounds
- * straight back to 3 - "impossible to zoom out past 300%". From 1x, zooming in
- * gives 1.2, which rounds back to 1 - "couldn't zoom in past 100%". Both
- * symptoms, one cause, and the clamp was innocent.
+ * The magnitude policy lives in shared/zoom.ts, because the timeline needs the
+ * same rule and writing it twice has produced two separate bugs. See that
+ * file's header for both.
  */
 function stepScale(from: number, factor: number, opts?: ViewportOptions): number {
-  const target = resolveScale(from * factor, opts);
-  if (target !== from || factor === 1) return target;
-  const snap = opts?.snapIntegerZoom ?? true;
-  if (!snap) return target;
-  // The snap ate the move. Take a whole step in the direction asked for.
-  const stepped = factor > 1 ? Math.floor(from) + 1 : from - 1;
-  return resolveScale(stepped, opts);
+  return resolveMagnitude(from, factor, {
+    min: opts?.minScale ?? DEFAULT_MIN_SCALE,
+    max: opts?.maxScale ?? DEFAULT_MAX_SCALE,
+    snapIntegersAboveOne: opts?.snapIntegerZoom ?? true,
+  });
 }
 
 export function zoomAt(
@@ -172,8 +167,12 @@ export function zoomAt(
   factor: number,
   opts?: ViewportOptions,
 ): ViewState {
-  const before = toImage(view, sx, sy);
   const scale = stepScale(view.scale, factor, opts);
+  // A zoom that cannot change the scale must not move the view either. The
+  // timeline had the same bug the other way round: at its limit it kept
+  // recentring on the cursor, so a dead wheel event silently panned.
+  if (scale === view.scale) return view;
+  const before = toImage(view, sx, sy);
   return {
     scale,
     originX: before.x - sx / scale,

@@ -14,6 +14,7 @@
 import {
   FORMATS,
   formatById,
+  PS1_NEAR_BLACK,
   countStalledFrames,
   fromLevel,
   levelOf,
@@ -138,6 +139,10 @@ const gFadeDistinct = $('g-fade-distinct');
 const gFadeRun = $<HTMLButtonElement>('g-fade-run');
 const gFadeStalled = $('g-fade-stalled');
 
+const dlgDiscard = $<HTMLDialogElement>('dlg-discard');
+const discardWhat = $('discard-what');
+const discardYes = $<HTMLButtonElement>('discard-yes');
+const discardNo = $<HTMLButtonElement>('discard-no');
 const dlgFormat = $<HTMLDialogElement>('dlg-format');
 const btnOpenFormat = $<HTMLButtonElement>('open-format');
 const colorsRow = $('colors-row');
@@ -189,11 +194,39 @@ interface AppState {
   playing: boolean;
   /** Where the playhead sits, in ticks. */
   playheadTick: number;
+  /** Unsaved changes. Cleared on load; will be cleared on save once that exists. */
+  dirty: boolean;
+}
+
+/**
+ * `animation` is a property, not a field, so the dirty flag cannot be forgotten
+ * at a mutation site. There are nineteen places that reassign it today and
+ * there will be more; marking each one by hand is a rule that holds until
+ * somebody adds the twentieth. Loading an image is the one assignment that
+ * CLEARS it instead, and it says so explicitly via `asClean`.
+ */
+let animationRef: Animation | null = null;
+let suppressDirty = false;
+
+/** Run a mutation that should not set the dirty flag (loading, not editing). */
+function asClean(fn: () => void): void {
+  suppressDirty = true;
+  try {
+    fn();
+  } finally {
+    suppressDirty = false;
+  }
 }
 
 const state: AppState = {
   formatId: 'rgba8888',
-  animation: null,
+  get animation(): Animation | null {
+    return animationRef;
+  },
+  set animation(v: Animation | null) {
+    animationRef = v;
+    if (!suppressDirty) state.dirty = true;
+  },
   imageW: 0,
   imageH: 0,
   imageBuffer: null,
@@ -205,6 +238,7 @@ const state: AppState = {
   hover: null,
   playing: false,
   playheadTick: 0,
+  dirty: false,
 };
 
 const paletteCanvas = $<HTMLCanvasElement>('palette-canvas');
@@ -308,6 +342,7 @@ fileInput.addEventListener('change', () => {
 });
 
 async function importFile(file: File): Promise<void> {
+  if (state.dirty && !(await confirmDiscard(file.name))) return;
   let bytes: Uint8Array;
   try {
     bytes = new Uint8Array(await file.arrayBuffer());
@@ -330,6 +365,38 @@ async function importFile(file: File): Promise<void> {
   pending = { image: decoded, name: file.name };
   openFormatDialog(true);
 }
+
+/**
+ * Ask before throwing away unsaved work. Resolves true to proceed.
+ *
+ * A <dialog> rather than window.confirm: confirm() is synchronous, blocks the
+ * rAF loop, and cannot be driven by the end-to-end tests. `beforeunload` still
+ * has to use the browser's own prompt, because a page cannot draw its own.
+ */
+function confirmDiscard(what: string): Promise<boolean> {
+  discardWhat.textContent = what;
+  return new Promise((resolveIt) => {
+    const done = (ok: boolean) => () => {
+      dlgDiscard.close();
+      discardYes.removeEventListener('click', yes);
+      discardNo.removeEventListener('click', no);
+      resolveIt(ok);
+    };
+    const yes = done(true);
+    const no = done(false);
+    discardYes.addEventListener('click', yes);
+    discardNo.addEventListener('click', no);
+    dlgDiscard.showModal();
+  });
+}
+
+// The browser will not show custom text here and has not for years; what it
+// shows is its own wording. Setting returnValue is what arms it at all.
+window.addEventListener('beforeunload', (e) => {
+  if (!state.dirty) return;
+  e.preventDefault();
+  e.returnValue = '';
+});
 
 interface PendingImport {
   image: DecodedPng;
@@ -431,7 +498,11 @@ function loadIndexedImage(img: IndexedImage): void {
   state.imageH = img.height;
   state.indices = img.indices;
   state.imageBuffer = createImageBuffer(img.width, img.height);
-  state.animation = createAnimation(state.formatId, palette, state.animation?.fps ?? 60);
+  const fresh = createAnimation(state.formatId, palette, state.animation?.fps ?? 60);
+  asClean(() => {
+    state.animation = fresh;
+  });
+  state.dirty = false;
   state.currentFrame = 0;
   state.selected = new Set();
   state.editingIndex = null;
@@ -439,7 +510,7 @@ function loadIndexedImage(img: IndexedImage): void {
   const rect = canvasWrap.getBoundingClientRect();
   state.view = fitView(state.view, img.width, img.height, rect.width, rect.height);
 
-  fpsInput.value = String(state.animation.fps);
+  fpsInput.value = String(fresh.fps);
 
   importHint.classList.add('hidden');
   formatChangeNote.textContent = '';
@@ -789,7 +860,7 @@ function renderFrameStrip(): void {
   const anim = state.animation;
   statusFrames.textContent = `${anim.frames.length} frame${anim.frames.length === 1 ? '' : 's'}`;
   const spanNote = frameSpan ? `, ${frameSpan[1] - frameSpan[0] + 1} selected` : '';
-  statusHoverFrame.textContent = `frame ${state.currentFrame}`;
+  statusHoverFrame.textContent = `frame ${state.currentFrame}${state.dirty ? ' *' : ''}`;
   statusLoop.textContent =
     (anim.loopStart !== null ? `loops at ${anim.loopStart}` : 'no loop') + spanNote;
 
@@ -989,15 +1060,27 @@ function buildCycleRun(base: Entry[]) {
  */
 function replaceSolidBlack(fmt: ColorFormat, frames: Entry[][], picker: HTMLInputElement): Entry[][] {
   if (!fmt.hasStp) return frames;
-  const sub = hexToEntry(picker.value);
+  const sub = packedField(fmt, picker, PS1_NEAR_BLACK);
   return frames.map((pal) =>
     pal.map((e) => (e.a > 0 && fmt.pack(e) === 0 ? { ...e, r: sub.r, g: sub.g, b: sub.b } : e)),
   );
 }
 
-function hexToEntry(hex: string): Entry {
-  const v = parseInt(hex.replace('#', ''), 16) || 0;
-  return { r: (v >> 16) & 0xff, g: (v >> 8) & 0xff, b: v & 0xff, a: 255 };
+/**
+ * Read a PACKED value out of a text field, in the format's own encoding.
+ *
+ * A colour picker was the wrong control here: the thing being chosen is a
+ * specific 16-bit word you are avoiding 0x0000 with, and a picker rounds it
+ * through 8-bit sRGB on the way in and out. The field is rewritten with the
+ * canonical spelling so a typo does not silently become black.
+ */
+function packedField(fmt: ColorFormat, el: HTMLInputElement, fallback: number): Entry {
+  const raw = el.value.trim().replace(/^0x/i, '').replace(/^#/, '');
+  const parsed = /^[0-9a-f]+$/i.test(raw) ? parseInt(raw, 16) : NaN;
+  const packed = Number.isFinite(parsed) ? parsed & 0xffff : fallback;
+  el.value = `0x${packed.toString(16).padStart(fmt.entryBits / 4, '0')}`;
+  el.classList.toggle('warn-field', !Number.isFinite(parsed));
+  return fmt.unpack(packed);
 }
 
 /** The frames a generator should transform, when a timeline span is selected. */

@@ -24,6 +24,7 @@
  */
 
 import type { ColorFormat, Entry } from '../shared/color.js';
+import { resolveMagnitude } from '../shared/zoom.js';
 
 const DEFAULT_PAD = 8;
 const DEFAULT_LANE_H = 32;
@@ -559,8 +560,7 @@ export class TimelineView {
     // enough to see the animation sitting inside the widget, and a zoom-out
     // request that hit the cap moved only the start, so the vertical wheel
     // silently behaved like a pan.
-    const minLen = w / MAX_PX_PER_TICK;
-    const maxLen = Math.max(minLen, w / MIN_PX_PER_TICK);
+    const { min: minLen, max: maxLen } = this._lengthBounds();
     const len = Math.max(minLen, Math.min(maxLen, end - start));
     // Overscroll is half a window past either end of the CONTENT. When the
     // window is longer than the content the two bounds cross, so order them
@@ -574,12 +574,29 @@ export class TimelineView {
     this.requestDraw();
   }
 
-  /** Zoom keeping `tick` pinned under the same x. */
+  /** The window-length limits, in ticks, for the current widget width. */
+  private _lengthBounds(): { min: number; max: number } {
+    const w = Math.max(1, this.cssWidth);
+    const min = w / MAX_PX_PER_TICK;
+    return { min, max: Math.max(min, w / MIN_PX_PER_TICK) };
+  }
+
+  /**
+   * Zoom keeping `tick` pinned under the same x.
+   *
+   * A request that cannot change the window length is dropped ENTIRELY. It
+   * used to fall through to setView, which clamped the length back and applied
+   * the recentred start anyway, so wheeling at the zoom limit panned the view
+   * instead of doing nothing. Same rule the image viewport follows, and the
+   * policy behind it is shared - see shared/zoom.ts.
+   */
   zoomAt(tick: number, factor: number): void {
-    this._userMovedView = true;
     const len = this.windowTicks;
+    const b = this._lengthBounds();
+    const next = resolveMagnitude(len, factor, b);
+    if (next === len) return;
+    this._userMovedView = true;
     const frac = len > 0 ? (tick - this.viewStartTick) / len : 0.5;
-    const next = len * factor;
     this.setView(tick - frac * next, tick - frac * next + next);
   }
 

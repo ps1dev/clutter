@@ -190,8 +190,29 @@ export function cycleEntries(opts: CycleEntriesOptions): Entry[][] {
   const len = idx.length;
   if (len <= 1) return [copy(base)];
   const inc = opts.increment ?? (dir === 'forward' ? 1 : -1);
-  const first = opts.skipFirst ? 1 : 0;
+  const shiftAt = (k: number): number => (((-Math.round(k * inc) % len) + len) % len);
   const steps = Math.max(1, opts.steps ?? (opts.skipFirst ? len - 1 : len));
+
+  // `skipFirst` means "do not re-emit the palette you started from". At
+  // increment 1 that is just k=1, but a fractional increment can hold the
+  // shift at zero for several steps - round(1 * 0.3) is 0 - so starting at k=1
+  // emitted a byte-identical copy of the base frame. Walk forward to the first
+  // step that actually moves.
+  //
+  // Only the LEADING zeros are skipped. A shift that returns to zero later in
+  // the run is a real frame of the cycle, the point at which it has come all
+  // the way round, and dropping it would break the loop.
+  let first = 0;
+  if (opts.skipFirst) {
+    first = 1;
+    // Bounded: at |increment| >= 1/len the shift must move within len steps,
+    // and below that the caller has asked for a cycle slower than one place
+    // per run, so give up rather than search forever.
+    const limit = 1 + Math.max(len, Math.ceil(1 / Math.max(1e-6, Math.abs(inc))));
+    while (first <= limit && shiftAt(first) === shiftAt(0)) first++;
+    if (first > limit) first = 1;
+  }
+
   const out: Entry[][] = [];
   for (let k = first; k < first + steps; k++) {
     // DDA: the integer shift for step k is the rounded value of the exact line
