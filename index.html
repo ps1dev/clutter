@@ -10,8 +10,9 @@
 <div id="app">
 
   <div id="toolbar">
-    <label>Import <input type="file" id="file-png" accept="image/png" class="hidden"></label>
-    <button id="btn-import">Open PNG</button>
+    <label>Import <input type="file" id="file-png" accept="image/png,application/json,.json" class="hidden"></label>
+    <button id="btn-import" title="A PNG to import, or a .clutter.json project to open">Open&hellip;</button>
+    <button id="btn-save" title="Save the project as JSON">Save</button>
     <span class="sep"></span>
     <button id="open-format" title="Change colour format">Format&hellip;</button>
     <span class="sep"></span>
@@ -31,7 +32,7 @@
     <div id="canvas-wrap">
       <canvas id="canvas"></canvas>
       <div id="readout"></div>
-      <div id="import-hint">Open a PNG to begin. An indexed PNG keeps its own palette; anything truecolour is quantized to the colour count in the toolbar.</div>
+      <div id="import-hint">Open a PNG to begin, or drop one here. An indexed PNG keeps its own palette; anything truecolour is quantized. A saved .clutter.json project opens the same way.</div>
     </div>
 
     <div id="right">

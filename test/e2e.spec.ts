@@ -13,7 +13,9 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright-core';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { resolve } from 'node:path';
 import { execSync } from 'node:child_process';
 
@@ -266,6 +268,79 @@ describe('generating and playing', () => {
     expect(signatures.length).toBeGreaterThan(1);
     expect(new Set(signatures).size).toBeGreaterThan(1);
   });
+});
+
+describe('project save and load', () => {
+  it('round-trips an edited animation through a file on disk', async () => {
+    const p5 = await browser.newPage({
+      viewport: { width: 1400, height: 900 },
+      acceptDownloads: true,
+    });
+    await p5.goto(`file://${DIST}`);
+    await p5.waitForSelector('#canvas');
+    await p5.setInputFiles('#file-png', resolve(ROOT, 'test/fixtures/indexed8-trns.png'));
+    await p5.waitForSelector('#dlg-format[open]');
+    await p5.selectOption('#format-select', 'rgb5551');
+    await p5.click('#format-apply');
+    await p5.waitForFunction(() => (document.querySelector('#s-msg')?.textContent ?? '').length > 0);
+
+    // Give it something worth preserving: extra frames, a hold, a loop point.
+    for (let i = 0; i < 2; i++) await p5.click('#f-duplicate');
+    await p5.fill('#f-hold', '7');
+    await p5.click('#f-loop-set');
+    await p5.fill('#fps-input', '24');
+    await p5.click('#s-frames');
+    expect(await p5.textContent('#s-frame')).toMatch(/\*/);
+
+    const download = await Promise.all([p5.waitForEvent('download'), p5.click('#btn-save')]);
+    const file = join(tmpdir(), `clutter-e2e-${Date.now()}.clutter.json`);
+    await download[0].saveAs(file);
+
+    // Saving is what clears the dirty flag; it was armed with nothing to
+    // disarm it until now.
+    expect(await p5.textContent('#s-frame')).not.toMatch(/\*/);
+
+    const doc = JSON.parse(readFileSync(file, 'utf8'));
+    expect(doc.kind).toBe('clutter-project');
+    expect(doc.colorFormat).toBe('rgb5551');
+    expect(doc.fps).toBe(24);
+    expect(doc.frames).toHaveLength(3);
+    expect(doc.width * doc.height).toBe(32 * 24);
+    // Palettes are stored as packed words, so every entry is a 16-bit integer.
+    for (const v of doc.frames[0].palette) {
+      expect(Number.isInteger(v)).toBe(true);
+      expect(v).toBeLessThanOrEqual(0xffff);
+    }
+
+    // Open it back in a clean page and compare what the UI reports.
+    const p6 = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+    await p6.goto(`file://${DIST}`);
+    await p6.waitForSelector('#canvas');
+    await p6.setInputFiles('#file-png', file);
+    await p6.waitForFunction(() => (document.querySelector('#s-msg')?.textContent ?? '').startsWith('Opened'));
+    // No format dialog on the project path - the file already says.
+    expect(await p6.locator('#dlg-format[open]').count()).toBe(0);
+    expect(await p6.textContent('#s-frames')).toBe('3 frames');
+    expect(await p6.textContent('#s-loop')).toMatch(/loops at/);
+    expect(await p6.inputValue('#fps-input')).toBe('24');
+    // A freshly opened project is not dirty.
+    expect(await p6.textContent('#s-frame')).not.toMatch(/\*/);
+
+    // And it refuses to silently eat a malformed file.
+    const bad = join(tmpdir(), `clutter-bad-${Date.now()}.json`);
+    writeFileSync(bad, JSON.stringify({ kind: 'clutter-project', version: 99 }));
+    await p6.setInputFiles('#file-png', bad);
+    await p6.waitForFunction(
+      () => (document.querySelector('#s-msg')?.textContent ?? '').includes('Could not open'),
+    );
+    expect(await p6.textContent('#s-msg')).toMatch(/unsupported version 99/);
+    expect(await p6.textContent('#s-frames')).toBe('3 frames');
+
+    unlinkSync(file);
+    unlinkSync(bad);
+    await p5.close();
+    await p6.close();
+  }, 90_000);
 });
 
 describe('the frame transforms', () => {

@@ -59,6 +59,11 @@ import {
 } from './core/generators.js';
 import { paletteLut, composeInto, createImageBuffer } from './core/compose.js';
 import {
+  parseProject,
+  ProjectError,
+  serializeProject,
+} from './core/project.js';
+import {
   copyFromIndex,
   phaseShift,
   resolveSelection,
@@ -359,6 +364,15 @@ fileInput.addEventListener('change', () => {
 
 async function importFile(file: File): Promise<void> {
   if (state.dirty && !(await confirmDiscard(file.name))) return;
+
+  // A project opens by the same route as an image, minus the format dialog:
+  // the file already says which format it was authored in, and asking again
+  // would offer to re-quantize a palette that is already exactly right.
+  if (/\.json$/i.test(file.name) || file.type === 'application/json') {
+    await openProject(file);
+    return;
+  }
+
   let bytes: Uint8Array;
   try {
     bytes = new Uint8Array(await file.arrayBuffer());
@@ -414,6 +428,86 @@ window.addEventListener('beforeunload', (e) => {
   e.returnValue = '';
 });
 
+async function openProject(file: File): Promise<void> {
+  let loaded;
+  try {
+    loaded = parseProject(await file.text());
+  } catch (err) {
+    const why = err instanceof ProjectError ? err.message : (err as Error).message;
+    setStatus(`Could not open ${file.name}: ${why}`);
+    return;
+  }
+
+  state.formatId = loaded.colorFormat;
+  formatSelect.value = loaded.colorFormat;
+  loadIndexedImage({
+    kind: 'indexed',
+    width: loaded.width,
+    height: loaded.height,
+    indices: loaded.indices,
+    palette: loaded.frames[0].palette,
+    sourceBitDepth: 8,
+  });
+  // loadIndexedImage builds a one-frame animation; the project's own frames,
+  // holds and metadata replace it wholesale. asClean because opening a file is
+  // not an edit.
+  asClean(() => {
+    state.animation = {
+      formatId: loaded.colorFormat,
+      paletteSize: loaded.frames[0].palette.length,
+      frames: loaded.frames.map((f) => ({ palette: f.palette, hold: f.hold })),
+      loopStart: loaded.loopStart,
+      fps: loaded.fps,
+    };
+  });
+  state.dirty = false;
+  state.currentFrame = 0;
+  state.playheadTick = 0;
+  frameSpan = null;
+  fpsInput.value = String(loaded.fps);
+  projectName = file.name.replace(/\.clutter\.json$|\.json$/i, '');
+  setStatus(
+    `Opened ${file.name}: ${loaded.width}x${loaded.height}, ${loaded.frames.length} frames, ${loaded.frames[0].palette.length} colours.`,
+  );
+  refreshAll();
+}
+
+let projectName = 'clutter';
+
+/**
+ * Save, and clear the dirty flag - the one thing that was armed with nothing to
+ * disarm it. Downloads rather than writing anywhere: the tool is a single HTML
+ * file with no server behind it, so the browser's own download path is the only
+ * one there is.
+ */
+function saveProject(): void {
+  if (!state.animation || !state.indices) {
+    setStatus('Nothing to save yet.');
+    return;
+  }
+  const doc = serializeProject({
+    colorFormat: state.animation.formatId,
+    fps: state.animation.fps,
+    loopStart: state.animation.loopStart,
+    width: state.imageW,
+    height: state.imageH,
+    indices: state.indices,
+    frames: state.animation.frames.map((f) => ({ hold: f.hold, palette: f.palette })),
+  });
+  const blob = new Blob([JSON.stringify(doc, null, 1)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${projectName}.clutter.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  state.dirty = false;
+  setStatus(`Saved ${a.download}: ${state.animation.frames.length} frames.`);
+  renderFrameStrip();
+}
+
+$<HTMLButtonElement>('btn-save').addEventListener('click', saveProject);
+
 interface PendingImport {
   image: DecodedPng;
   name: string;
@@ -452,6 +546,7 @@ formatApply.addEventListener('click', (ev) => {
     if (image.kind === 'truecolor') {
       importTruecolor(image, name);
     } else {
+      projectName = name.replace(/\.png$/i, '');
       loadIndexedImage(image);
       setStatus(`Loaded ${name}: ${image.width}x${image.height}, ${image.palette.length} colours.`);
     }
@@ -470,6 +565,7 @@ formatApply.addEventListener('click', (ev) => {
  * here - two entries can collide once truncated - and you want to be told.
  */
 function importTruecolor(img: TruecolorImage, name: string): void {
+  projectName = name.replace(/\.png$/i, '');
   const fmt = formatById(state.formatId);
   const maxColors = Math.min(256, Math.max(2, Math.round(Number(colorsInput.value) || 16)));
   colorsInput.value = String(maxColors);
