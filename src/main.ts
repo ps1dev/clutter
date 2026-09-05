@@ -21,7 +21,12 @@ import {
   type Entry,
   type FormatId,
 } from './shared/color.js';
-import { decodePng, type IndexedImage, type TruecolorImage } from './shared/png.js';
+import {
+  decodePng,
+  type DecodedPng,
+  type IndexedImage,
+  type TruecolorImage,
+} from './shared/png.js';
 import { quantize } from './shared/quantize.js';
 import {
   fitView,
@@ -50,7 +55,6 @@ import {
   hsvRampOver,
   interpolateOver,
   interpolateTo,
-  type CycleDirection,
 } from './core/generators.js';
 import { paletteLut, composeInto, createImageBuffer } from './core/compose.js';
 import {
@@ -110,7 +114,7 @@ const fLoopSet = $<HTMLButtonElement>('f-loop-set');
 const fLoopClear = $<HTMLButtonElement>('f-loop-clear');
 
 const gCycleTarget = $('g-cycle-target');
-const gCycleDir = $<HTMLSelectElement>('g-cycle-dir');
+const gCycleInc = $<HTMLInputElement>('g-cycle-inc');
 const gCycleSteps = $<HTMLInputElement>('g-cycle-steps');
 const gCycleDistinct = $('g-cycle-distinct');
 const gCycleRun = $<HTMLButtonElement>('g-cycle-run');
@@ -134,6 +138,13 @@ const gFadeDistinct = $('g-fade-distinct');
 const gFadeRun = $<HTMLButtonElement>('g-fade-run');
 const gFadeStalled = $('g-fade-stalled');
 
+const dlgFormat = $<HTMLDialogElement>('dlg-format');
+const btnOpenFormat = $<HTMLButtonElement>('open-format');
+const colorsRow = $('colors-row');
+const formatApply = $<HTMLButtonElement>('format-apply');
+const formatDialogNote = $('format-dialog-note');
+const gHsbBlack = $<HTMLInputElement>('g-hsb-black');
+const gFadeBlack = $<HTMLInputElement>('g-fade-black');
 const dlgCycle = $<HTMLDialogElement>('dlg-cycle');
 const dlgHsb = $<HTMLDialogElement>('dlg-hsb');
 const dlgFade = $<HTMLDialogElement>('dlg-fade');
@@ -313,14 +324,58 @@ async function importFile(file: File): Promise<void> {
     return;
   }
 
-  if (decoded.kind === 'truecolor') {
-    importTruecolor(decoded, file.name);
+  // Ask for the format BEFORE committing the palette. Changing format is a
+  // re-quantization now, not a change of lens, so picking it after the fact
+  // means quantizing twice and losing precision to the first pass for nothing.
+  pending = { image: decoded, name: file.name };
+  openFormatDialog(true);
+}
+
+interface PendingImport {
+  image: DecodedPng;
+  name: string;
+}
+let pending: PendingImport | null = null;
+
+/**
+ * `atImport` shows the palette-size control, which only ever applies to the
+ * image being brought in. Afterwards the dialog is format-only: re-quantizing
+ * an existing palette to a different size is a different operation and would
+ * need a source image we no longer have.
+ */
+function openFormatDialog(atImport: boolean): void {
+  const truecolour = atImport && pending?.image.kind === 'truecolor';
+  colorsRow.classList.toggle('hidden', !truecolour);
+  formatSelect.value = state.formatId;
+  formatDialogNote.textContent = atImport
+    ? truecolour
+      ? 'Truecolour image: pick the target format and how many palette entries to quantize to.'
+      : 'Indexed image: it brings its own palette, so only the format is up to you.'
+    : 'Changing format re-quantizes every entry of every frame. Going to a narrower format and back does not round-trip.';
+  formatApply.textContent = atImport ? 'Import' : 'Apply';
+  dlgFormat.showModal();
+}
+
+btnOpenFormat.addEventListener('click', () => openFormatDialog(false));
+
+formatApply.addEventListener('click', (ev) => {
+  ev.preventDefault();
+  const newId = formatSelect.value as FormatId;
+  dlgFormat.close();
+  if (pending) {
+    const { image, name } = pending;
+    pending = null;
+    state.formatId = newId;
+    if (image.kind === 'truecolor') {
+      importTruecolor(image, name);
+    } else {
+      loadIndexedImage(image);
+      setStatus(`Loaded ${name}: ${image.width}x${image.height}, ${image.palette.length} colours.`);
+    }
     return;
   }
-
-  loadIndexedImage(decoded);
-  setStatus(`Loaded ${file.name}: ${decoded.width}x${decoded.height}, ${decoded.palette.length} colours.`);
-}
+  applyFormatChange(newId);
+});
 
 /**
  * Quantize a truecolour import down to an indexed image.
@@ -404,8 +459,7 @@ for (const id of Object.keys(FORMATS) as FormatId[]) {
 }
 formatSelect.value = state.formatId;
 
-formatSelect.addEventListener('change', () => {
-  const newId = formatSelect.value as FormatId;
+function applyFormatChange(newId: FormatId): void {
   state.formatId = newId;
   if (!state.animation) return;
 
@@ -437,7 +491,7 @@ formatSelect.addEventListener('change', () => {
       : 'no visible change in this format';
 
   refreshAll();
-});
+}
 
 // ---------------------------------------------------------------------------
 // Palette grid + entry editor
@@ -751,16 +805,12 @@ function renderFrameStrip(): void {
   timeline.setContent({ frames: anim.frames, fmt: formatById(anim.formatId) });
 }
 
-timeline.onScrub = (tick) => {
+timeline.onScrub = (frame) => {
   if (!state.animation) return;
   stopPlayback();
-  state.playheadTick = Math.max(0, tick);
-  let acc = 0;
-  for (let i = 0; i < state.animation.frames.length; i++) {
-    acc += Math.max(1, state.animation.frames[i].hold);
-    if (tick < acc) return selectFrame(i);
-  }
-  selectFrame(state.animation.frames.length - 1);
+  if (frame === state.currentFrame) return;
+  state.playheadTick = tickForFrame(state.animation, frame);
+  selectFrame(frame);
 };
 timeline.onSelectFrame = (i) => {
   stopPlayback();
@@ -925,10 +975,29 @@ function insertGenerated(generated: Entry[][], kind: string, params: Record<stri
 
 function buildCycleRun(base: Entry[]) {
   const indices = [...state.selected].filter((i) => i >= 0 && i < base.length).sort((a, b) => a - b);
-  const direction = gCycleDir.value as CycleDirection;
+  const increment = Number(gCycleInc.value) || 0;
   const steps = Math.max(1, Math.round(Number(gCycleSteps.value)));
-  const params = { indices, direction, steps, skipFirst: true };
-  return { params, frames: cycleEntries({ base, indices, direction, steps, skipFirst: true }) };
+  const params = { indices, increment, steps, skipFirst: true };
+  return { params, frames: cycleEntries({ base, indices, increment, steps, skipFirst: true }) };
+}
+
+/**
+ * In RGB5551 a generated colour that lands on 0x0000 is read by the GPU as
+ * fully transparent, so a fade to black silently punches holes in the image.
+ * Every generator that INVENTS colours routes its output through here; the
+ * substitute is the user's, defaulting to 0x0421 the way timweb does it.
+ */
+function replaceSolidBlack(fmt: ColorFormat, frames: Entry[][], picker: HTMLInputElement): Entry[][] {
+  if (!fmt.hasStp) return frames;
+  const sub = hexToEntry(picker.value);
+  return frames.map((pal) =>
+    pal.map((e) => (e.a > 0 && fmt.pack(e) === 0 ? { ...e, r: sub.r, g: sub.g, b: sub.b } : e)),
+  );
+}
+
+function hexToEntry(hex: string): Entry {
+  const v = parseInt(hex.replace('#', ''), 16) || 0;
+  return { r: (v >> 16) & 0xff, g: (v >> 8) & 0xff, b: v & 0xff, a: 255 };
 }
 
 /** The frames a generator should transform, when a timeline span is selected. */
@@ -949,12 +1018,11 @@ function buildHsbRun(base: Entry[]) {
   const params = { indices, hueFrom, hueTo, sat, val, steps: over ? over.length : steps, closed };
   const from = { hue: hueFrom, sat, val };
   const to = { hue: hueTo, sat, val };
-  return {
-    params,
-    frames: over
-      ? hsvRampOver({ frames: over, indices, from, to, closed })
-      : hsvRamp({ base, indices, from, to, steps, closed }),
-  };
+  const fmt = formatById(state.formatId);
+  const frames = over
+    ? hsvRampOver({ frames: over, indices, from, to, closed })
+    : hsvRamp({ base, indices, from, to, steps, closed });
+  return { params, frames: replaceSolidBlack(fmt, frames, gHsbBlack) };
 }
 
 function buildFadeRun(base: Entry[]) {
@@ -964,12 +1032,11 @@ function buildFadeRun(base: Entry[]) {
   const closed = gFadeClosed.checked;
   const over = spanFrames();
   const params = { indices, to, steps: over ? over.length : steps, closed };
-  return {
-    params,
-    frames: over
-      ? interpolateOver({ frames: over, indices, to, closed })
-      : interpolateTo({ base, indices, to, steps, closed }),
-  };
+  const fmt = formatById(state.formatId);
+  const frames = over
+    ? interpolateOver({ frames: over, indices, to, closed })
+    : interpolateTo({ base, indices, to, steps, closed });
+  return { params, frames: replaceSolidBlack(fmt, frames, gFadeBlack) };
 }
 
 /** How many of these palettes are distinct once packed into the target format. */
@@ -1012,6 +1079,11 @@ function updateGeneratorNotes(): void {
         ? 'Select two or more palette entries to cycle. A non-contiguous selection is cycled as if it were contiguous.'
         : '';
   const cycleOff = why !== '';
+  // The button that OPENS the modal is the one to grey out. Disabling only the
+  // Generate button inside put the explanation one click away from the thing
+  // it explains.
+  $<HTMLButtonElement>('open-cycle').disabled = cycleOff;
+  $<HTMLButtonElement>('open-cycle').title = why;
   gCycleRun.disabled = cycleOff;
   // The reason rides on the button as a tooltip as well as in the panel text:
   // a greyed control with the explanation somewhere else is a control you have
@@ -1025,6 +1097,9 @@ function updateGeneratorNotes(): void {
     gCycleSteps.value = String(Math.max(1, nSel - 1));
   }
 
+  for (const id of ['hsb', 'fade']) {
+    $(`g-${id}-black-row`).classList.toggle('hidden', !fmt.hasStp);
+  }
   for (const id of ['hsb', 'fade']) {
     $(`g-${id}-steps-row`).classList.toggle('disabled', span !== null);
     $<HTMLInputElement>(`g-${id}-steps`).disabled = span !== null;

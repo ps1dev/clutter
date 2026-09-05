@@ -45,7 +45,7 @@ async function run(fixture, hi) {
   );
   await page.locator('#palette-canvas').click({ position: { x: 16, y: 16 } });
   await page.locator('#palette-canvas').click({ position: pos, modifiers: ['Shift'] });
-  await page.click('#open-cycle');
+  await page.click("#open-cycle");
   await page.fill('#g-cycle-steps', '16');
   await page.click('#g-cycle-run');
   await page.evaluate(() => document.getElementById('dlg-cycle').close());

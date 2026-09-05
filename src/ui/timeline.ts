@@ -121,6 +121,14 @@ export function tickAtX(layout: TimelineLayout, x: number): number {
   if (spans.length === 0 || totalTicks <= 0) return 0;
   const first = spans[0];
   const last = spans[spans.length - 1];
+  // Outside the content, extrapolate at the layout's own rate instead of
+  // clamping. Clamping here is what made panning past either end silently do
+  // nothing: the view start went negative and mapped back to x=0, so the
+  // content kept rendering hard against the left edge.
+  if (x < first.x) return (x - first.x) / Math.max(1e-9, layout.pxPerTick);
+  if (x > last.x + last.w) {
+    return totalTicks + (x - (last.x + last.w)) / Math.max(1e-9, layout.pxPerTick);
+  }
   const cx = Math.min(Math.max(x, first.x), last.x + last.w);
 
   let i = spans.length - 1;
@@ -140,6 +148,11 @@ export function tickAtX(layout: TimelineLayout, x: number): number {
 export function xForTick(layout: TimelineLayout, tick: number): number {
   const { spans, totalTicks, pad } = layout;
   if (spans.length === 0) return pad;
+  const lastSpan = spans[spans.length - 1];
+  if (tick < 0) return spans[0].x + tick * layout.pxPerTick;
+  if (tick > totalTicks) {
+    return lastSpan.x + lastSpan.w + (tick - totalTicks) * layout.pxPerTick;
+  }
   const t = Math.min(totalTicks, Math.max(0, tick));
 
   let i = spans.length - 1;
@@ -453,7 +466,15 @@ export class TimelineView {
   viewEndTick = 1;
 
   /** Wired by the app. The view never mutates the animation itself. */
-  onScrub: ((tick: number) => void) | null = null;
+  /**
+   * Scrubbing reports a FRAME, not a tick.
+   *
+   * A continuous tick let the playhead sit mid-frame, which reads as not
+   * snapping and makes it ambiguous which frame you are on near a boundary.
+   * Reporting the frame under the cursor removes the tick-to-frame conversion
+   * entirely, so there is nowhere left for a rounding disagreement to live.
+   */
+  onScrub: ((frame: number) => void) | null = null;
   onSelectFrame: ((index: number) => void) | null = null;
   onSelectSpan: ((span: [number, number] | null) => void) | null = null;
   onSetLoop: ((index: number) => void) | null = null;
@@ -494,11 +515,23 @@ export class TimelineView {
    */
   private _userMovedView = false;
 
+  private _lastTotalTicks = -1;
+
   setContent(content: TimelineContent): void {
     this.frames = content.frames;
     this.fmt = content.fmt;
-    if (!this._userMovedView || this.viewEndTick <= this.viewStartTick) this.fit();
-    else this.setView(this.viewStartTick, this.viewEndTick);
+    const total = this.totalTicks;
+    // Refit only when the CONTENT changed. Refitting on every setContent reset
+    // the view in the middle of a drag - the app calls this from refreshAll,
+    // which a scrub triggers on every pointermove - and the mapping shifting
+    // under the cursor is what made scrubbing jump back erratically.
+    const contentChanged = total !== this._lastTotalTicks;
+    this._lastTotalTicks = total;
+    if ((!this._userMovedView && contentChanged) || this.viewEndTick <= this.viewStartTick) {
+      this.fit();
+    } else {
+      this.setView(this.viewStartTick, this.viewEndTick);
+    }
     this.requestDraw();
   }
 
@@ -671,7 +704,8 @@ export class TimelineView {
         return;
       }
       this._drag = { kind: 'scrub' };
-      this.onScrub?.(this.tickAt(x));
+      const at = this.frameAt(x);
+      if (at !== null) this.onScrub?.(at);
     });
 
     this.canvas.addEventListener('pointermove', (ev) => {
@@ -690,7 +724,8 @@ export class TimelineView {
         return;
       }
       if (d.kind === 'scrub') {
-        this.onScrub?.(this.tickAt(x));
+        const at = this.frameAt(x);
+        if (at !== null) this.onScrub?.(at);
         return;
       }
       if (d.kind === 'loop') {

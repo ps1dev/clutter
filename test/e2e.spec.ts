@@ -65,8 +65,12 @@ afterAll(async () => {
   await browser?.close();
 });
 
-async function importFixture(name: string): Promise<void> {
+async function importFixture(name: string, fmt?: string): Promise<void> {
   await page.setInputFiles('#file-png', resolve(ROOT, 'test/fixtures', name));
+  // Import asks for the format first now.
+  await page.waitForSelector('#dlg-format[open]', { timeout: 20_000 });
+  if (fmt) await page.selectOption('#format-select', fmt);
+  await page.click('#format-apply');
   await page.waitForFunction(
     () => (document.querySelector('#s-msg')?.textContent ?? '').length > 0,
     undefined,
@@ -152,8 +156,15 @@ describe('indexed import', () => {
 
 describe('truecolour import goes through the quantizer', () => {
   it('reports what the quantizer actually did', async () => {
+    await page.setInputFiles('#file-png', resolve(ROOT, 'test/fixtures/truecolor-rgba.png'));
+    await page.waitForSelector('#dlg-format[open]');
+    // The palette-size control is offered at import, and only for truecolour.
+    expect(await page.locator('#colors-input').isVisible()).toBe(true);
     await page.fill('#colors-input', '8');
-    await importFixture('truecolor-rgba.png');
+    await page.click('#format-apply');
+    await page.waitForFunction(
+      () => (document.querySelector('#s-msg')?.textContent ?? '').startsWith('Quantized'),
+    );
     const msg = (await status()) ?? '';
     expect(msg).toMatch(/^Quantized truecolor-rgba\.png/);
     expect(msg).toMatch(/48x40/);
@@ -167,9 +178,7 @@ describe('truecolour import goes through the quantizer', () => {
   });
 
   it('quantizes into the PlayStation format when that is selected', async () => {
-    await page.selectOption('#format-select', 'rgb5551');
-    await page.fill('#colors-input', '16');
-    await importFixture('truecolor-rgba.png');
+    await importFixture('truecolor-rgba.png', 'rgb5551');
     expect(await status()).toMatch(/^Quantized/);
     // rgb5551 has no alpha row and does have an STP row. This is the
     // discriminator that the format actually reached the editor, not just the
@@ -191,15 +200,21 @@ describe('truecolour import goes through the quantizer', () => {
       );
     expect(await maxes()).toEqual(['31', '31', '31']);
 
-    await page.selectOption('#format-select', 'rgb565');
-    await page.locator('#palette-canvas').click({ position: { x: 16, y: 16 } });
+    const switchTo = async (id: string): Promise<void> => {
+      await page.click('#open-format');
+      // Never offered again after import.
+      expect(await page.locator('#colors-input').isVisible()).toBe(false);
+      await page.selectOption('#format-select', id);
+      await page.click('#format-apply');
+      await page.locator('#palette-canvas').click({ position: { x: 16, y: 16 } });
+    };
+    await switchTo('rgb565');
     expect(await maxes()).toEqual(['31', '63', '31']);
 
-    await page.selectOption('#format-select', 'rgba8888');
-    await page.locator('#palette-canvas').click({ position: { x: 16, y: 16 } });
+    await switchTo('rgba8888');
     expect(await maxes()).toEqual(['255', '255', '255']);
     expect(await page.locator('#e-a-row').isVisible()).toBe(true);
-    await page.selectOption('#format-select', 'rgb5551');
+    await switchTo('rgb5551');
     await shot('03-quantized-5551');
   });
 });
@@ -213,13 +228,14 @@ describe('generating and playing', () => {
     // disabled without one. Assert the disabled state first: it is the new
     // rule, and a test that only exercises the happy path cannot tell a
     // working gate from an absent one.
-    await page.click('#open-cycle');
-    expect(await page.locator('#dlg-cycle').isVisible()).toBe(true);
-    expect(await page.locator('#g-cycle-run').isDisabled()).toBe(true);
-    await page.evaluate(() => (document.getElementById('dlg-cycle') as HTMLDialogElement).close());
+    // The button that OPENS the tool is the one that goes dead, with the
+    // reason on it - not a live button leading to a dead one inside.
+    expect(await page.locator('#open-cycle').isDisabled()).toBe(true);
+    expect(await page.locator('#open-cycle').getAttribute('title')).toMatch(/select two or more/i);
 
     await clickSwatch(0);
     await clickSwatch(7, true);
+    expect(await page.locator('#open-cycle').isDisabled()).toBe(false);
     await page.click('#open-cycle');
     expect(await page.locator('#g-cycle-run').isDisabled()).toBe(false);
     await page.fill('#g-cycle-steps', '8');
@@ -264,6 +280,8 @@ describe('looping playback', () => {
     await p2.goto(`file://${DIST}`);
     await p2.waitForSelector('#canvas');
     await p2.setInputFiles('#file-png', resolve(ROOT, 'test/fixtures/indexed8-trns.png'));
+    await p2.waitForSelector('#dlg-format[open]');
+    await p2.click('#format-apply');
     await p2.waitForFunction(() => (document.querySelector('#s-msg')?.textContent ?? '').length > 0);
     for (let i = 0; i < 3; i++) await p2.click('#f-duplicate');
     await p2.fill('#fps-input', '20');
@@ -305,6 +323,8 @@ describe('device pixel ratio', () => {
       await ctxPage.goto(`file://${DIST}`);
       await ctxPage.waitForSelector('#canvas');
       await ctxPage.setInputFiles('#file-png', resolve(ROOT, 'test/fixtures/indexed8-trns.png'));
+      await ctxPage.waitForSelector('#dlg-format[open]');
+      await ctxPage.click('#format-apply');
       await ctxPage.waitForFunction(
         () => (document.querySelector('#s-msg')?.textContent ?? '').length > 0,
       );

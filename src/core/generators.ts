@@ -157,6 +157,14 @@ export interface CycleEntriesOptions {
   /** Palette indices to rotate among each other. Order is normalised to ascending. */
   indices: number[];
   direction?: CycleDirection;
+  /**
+   * Signed places to shift per frame, fractional allowed. Positive moves
+   * colours toward higher indices. 1 is one place per frame; 0.5 is one place
+   * every second frame; -0.25 is one place backwards every fourth.
+   *
+   * Takes precedence over `direction`, which is kept for `cycleRange`.
+   */
+  increment?: number;
   steps?: number;
   /**
    * Skip step 0, which is the base palette unchanged.
@@ -181,14 +189,18 @@ export function cycleEntries(opts: CycleEntriesOptions): Entry[][] {
   const dir = opts.direction ?? 'forward';
   const len = idx.length;
   if (len <= 1) return [copy(base)];
+  const inc = opts.increment ?? (dir === 'forward' ? 1 : -1);
   const first = opts.skipFirst ? 1 : 0;
   const steps = Math.max(1, opts.steps ?? (opts.skipFirst ? len - 1 : len));
   const out: Entry[][] = [];
   for (let k = first; k < first + steps; k++) {
+    // DDA: the integer shift for step k is the rounded value of the exact line
+    // k * increment. Evaluated rather than accumulated, so a long run cannot
+    // drift the way `acc += inc` does at float precision - same sequence, no
+    // error term.
     const pal = copy(base);
     for (let i = 0; i < len; i++) {
-      const shift = dir === 'forward' ? i - k : i + k;
-      const src = ((shift % len) + len) % len;
+      const src = (((i - Math.round(k * inc)) % len) + len) % len;
       pal[idx[i]] = { ...base[idx[src]] };
     }
     out.push(pal);

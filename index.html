@@ -13,12 +13,7 @@
     <label>Import <input type="file" id="file-png" accept="image/png" class="hidden"></label>
     <button id="btn-import">Open PNG</button>
     <span class="sep"></span>
-    <label>Format
-      <select id="format-select"></select>
-    </label>
-    <label title="Palette size used when quantizing a truecolour PNG on import">Colours
-      <input type="number" id="colors-input" min="2" max="256" step="1" value="16">
-    </label>
+    <button id="open-format" title="Change colour format">Format&hellip;</button>
     <span class="sep"></span>
     <button id="btn-play">Play</button>
     <label>fps <input type="number" id="fps-input" min="1" max="240" step="1" value="60"></label>
@@ -110,11 +105,8 @@
   <h3>Colour cycle</h3>
         <p class="note" id="g-cycle-target">Cycles the palette entries you have selected.</p>
         <div class="row">
-          <label>direction
-            <select id="g-cycle-dir">
-              <option value="forward">forward</option>
-              <option value="backward">backward</option>
-            </select>
+          <label title="Signed places to shift per frame. 1 is one place a frame, 0.5 is one every two frames, negative runs backwards.">increment
+            <input type="number" id="g-cycle-inc" step="0.05" value="1">
           </label>
         </div>
         <div class="row">
@@ -141,6 +133,11 @@
           <label id="g-hsb-steps-row">steps <input type="number" id="g-hsb-steps" min="1" value="12"></label>
           <label><input type="checkbox" id="g-hsb-closed"> closed</label>
         </div>
+        <div class="row ps1-only" id="g-hsb-black-row">
+          <label title="RGB5551 reads 0x0000 as fully transparent, so a generated colour that lands on solid black is replaced with this instead.">black becomes
+            <input type="color" id="g-hsb-black" value="#080808">
+          </label>
+        </div>
         <div class="note" id="g-hsb-distinct"></div>
         <button id="g-hsb-run">Generate</button>
         <div class="note" id="g-hsb-stalled"></div>
@@ -158,10 +155,28 @@
           <label id="g-fade-steps-row">steps <input type="number" id="g-fade-steps" min="1" value="8"></label>
           <label><input type="checkbox" id="g-fade-closed"> closed</label>
         </div>
+        <div class="row ps1-only" id="g-fade-black-row">
+          <label title="RGB5551 reads 0x0000 as fully transparent, so a generated colour that lands on solid black is replaced with this instead.">black becomes
+            <input type="color" id="g-fade-black" value="#080808">
+          </label>
+        </div>
         <div class="note" id="g-fade-distinct"></div>
         <button id="g-fade-run">Generate</button>
         <div class="note" id="g-fade-stalled"></div>
 
+</dialog>
+
+<dialog id="dlg-format" class="generator-dialog">
+  <form method="dialog"><button class="dlg-close" aria-label="Close">&times;</button></form>
+  <h3>Colour format</h3>
+  <div class="row">
+    <label>format <select id="format-select"></select></label>
+  </div>
+  <div class="row" id="colors-row">
+    <label title="Palette size used when quantizing this image">colours <input type="number" id="colors-input" min="2" max="256" step="1" value="16"></label>
+  </div>
+  <p class="note" id="format-dialog-note"></p>
+  <button id="format-apply">Apply</button>
 </dialog>
 
 <script type="module" src="./src/main.ts"></script>

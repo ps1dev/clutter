@@ -271,3 +271,41 @@ describe('selection-driven generators', () => {
     expect(hsvRampOver({ frames, from: {}, to: { hue: 180 } }).length).toBe(4);
   });
 });
+
+describe('fractional cycle increment', () => {
+  const base = [A, B, C, D];
+  const first = (pal: Entry[]): Entry => pal[0];
+
+  it('shifts one place per frame at increment 1', () => {
+    const out = cycleEntries({ base, indices: [0, 1, 2, 3], increment: 1, steps: 4 });
+    expect(out.map(first)).toEqual([A, D, C, B]);
+  });
+
+  it('holds for two frames at increment 0.5', () => {
+    const out = cycleEntries({ base, indices: [0, 1, 2, 3], increment: 0.5, steps: 5 });
+    // round(k*0.5) is 0,1,1,2,2 - JS rounds .5 up, so step 1 already moves.
+    // Compare by value: the generator copies entries, so identity never matches.
+    const key = (e: Entry) => `${e.r},${e.g},${e.b}`;
+    const shifts = out.map((p) => base.findIndex((e) => key(e) === key(p[0])));
+    expect(shifts).toEqual([0, 3, 3, 2, 2]);
+  });
+
+  it('runs backwards on a negative increment', () => {
+    const fwd = cycleEntries({ base, indices: [0, 1, 2, 3], increment: 1, steps: 3 });
+    const back = cycleEntries({ base, indices: [0, 1, 2, 3], increment: -1, steps: 3 });
+    expect(back[1]).not.toEqual(fwd[1]);
+    expect(back.map(first)).toEqual([A, B, C]);
+  });
+
+  it('does not drift over a long run', () => {
+    // The property a DDA buys: step 400 at 0.25 is exactly 100 places, which
+    // on a 4-entry palette is the identity. An accumulating float would be off.
+    const out = cycleEntries({ base, indices: [0, 1, 2, 3], increment: 0.25, steps: 401 });
+    expect(out[400]).toEqual(out[0]);
+  });
+
+  it('stands still at increment 0', () => {
+    const out = cycleEntries({ base, indices: [0, 1, 2, 3], increment: 0, steps: 4 });
+    for (const pal of out) expect(pal).toEqual(base);
+  });
+});

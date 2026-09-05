@@ -120,15 +120,31 @@ describe('tickAtX / xForTick: round trip, floor-aware', () => {
     }
   });
 
-  it('tickAtX clamps to [0, totalTicks] outside the content', () => {
-    expect(tickAtX(l, -1000)).toBe(0);
-    expect(tickAtX(l, 1_000_000)).toBe(l.totalTicks);
+  // Changed 2026-09-05. These two asserted CLAMPING, which is what stopped the
+  // widget from panning past either end: the view start went negative, mapped
+  // back to x = 0, and the content kept rendering hard against the left edge.
+  // Outside the content both functions now extrapolate at the layout's rate.
+  it('tickAtX extrapolates past both ends instead of clamping', () => {
+    expect(tickAtX(l, -1000)).toBeLessThan(0);
+    expect(tickAtX(l, 1_000_000)).toBeGreaterThan(l.totalTicks);
   });
 
-  it('xForTick clamps to the content span for out-of-range ticks', () => {
+  it('xForTick extrapolates past both ends instead of clamping', () => {
     const last = l.spans[l.spans.length - 1];
-    expect(xForTick(l, -50)).toBeCloseTo(l.spans[0].x);
-    expect(xForTick(l, l.totalTicks + 50)).toBeCloseTo(last.x + last.w);
+    expect(xForTick(l, -50)).toBeLessThan(l.spans[0].x);
+    expect(xForTick(l, l.totalTicks + 50)).toBeGreaterThan(last.x + last.w);
+  });
+
+  it('stays an exact inverse OUTSIDE the content too', () => {
+    // The property that makes panning work: if these two disagree beyond the
+    // ends, the view scrolls at a different rate from the content it is
+    // scrolling over.
+    for (const t of [-500, -37.5, -1, l.totalTicks + 1, l.totalTicks + 200]) {
+      expect(tickAtX(l, xForTick(l, t))).toBeCloseTo(t, 6);
+    }
+    for (const x of [-400, -12, l.width + 5, l.width + 300]) {
+      expect(xForTick(l, tickAtX(l, x))).toBeCloseTo(x, 6);
+    }
   });
 
   it('xForTick maps each startTick exactly to its span origin', () => {

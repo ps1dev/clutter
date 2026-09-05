@@ -424,3 +424,8 @@ input[type='range'] {
 .disabled {
   opacity: 0.4;
 }
+
+/* Shown only when the PlayStation format is active. */
+.ps1-only.hidden {
+  display: none;
+}
