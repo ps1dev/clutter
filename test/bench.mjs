@@ -31,6 +31,9 @@ async function run(fixture, hi) {
   await page.goto(`file://${DIST}`);
   await page.waitForSelector('#canvas');
   await page.setInputFiles('#file-png', resolve(ROOT, 'test/fixtures', fixture));
+  // Import asks for the colour format first.
+  await page.waitForSelector('#dlg-format[open]');
+  await page.click('#format-apply');
   await page.waitForFunction(() => (document.querySelector('#s-msg')?.textContent ?? '').length > 0);
   await page.click('#btn-fit');
   // The cycle takes its entries from the palette selection now.
