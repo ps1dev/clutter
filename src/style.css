@@ -444,3 +444,15 @@ input[type='range'] {
 #gen-buttons2 button {
   flex: 1;
 }
+
+#dlg-export {
+  min-width: 420px;
+}
+#ex-template {
+  font: 11px/1.35 ui-monospace, monospace;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  resize: vertical;
+}

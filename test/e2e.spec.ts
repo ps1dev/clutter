@@ -351,6 +351,60 @@ describe('project save and load', () => {
   }, 90_000);
 });
 
+describe('export', () => {
+  it('writes a multi-CLUT TIM whose block matches what the dialog promised', async () => {
+    const p7 = await browser.newPage({
+      viewport: { width: 1400, height: 900 },
+      acceptDownloads: true,
+    });
+    await p7.goto(`file://${DIST}`);
+    await p7.waitForSelector('#canvas');
+    await p7.setInputFiles('#file-png', resolve(ROOT, 'test/fixtures/indexed8-trns.png'));
+    await p7.waitForSelector('#dlg-format[open]');
+    await p7.selectOption('#format-select', 'rgb5551');
+    await p7.click('#format-apply');
+    await p7.waitForFunction(() => (document.querySelector('#s-msg')?.textContent ?? '').length > 0);
+    for (let i = 0; i < 4; i++) await p7.click('#f-duplicate');
+    expect(await p7.textContent('#s-frames')).toBe('5 frames');
+
+    await p7.click('#btn-export');
+    await p7.selectOption('#ex-what', 'tim');
+    await p7.fill('#ex-per-row', '2');
+    // The note is a promise about the file; the assertions below check the
+    // file keeps it. A dialog that describes one block and writes another is
+    // the failure worth catching here.
+    // 20 colours means 8bpp, so a palette row is 256 slots and two per row is
+    // 512 halfwords across, three rows deep for five frames.
+    expect(await p7.textContent('#ex-note')).toMatch(/CLUT block 512x3 halfwords/);
+
+    const [dl] = await Promise.all([p7.waitForEvent('download'), p7.click('#ex-run')]);
+    const file = join(tmpdir(), `clutter-e2e-${Date.now()}.tim`);
+    await dl.saveAs(file);
+    const buf = readFileSync(file);
+    expect(buf[0]).toBe(0x10);
+    // Flags: 8bpp (type 1) with a CLUT.
+    expect(buf.readUInt32LE(4)).toBe(0x09);
+    // CLUT section header at byte 8: length, then (y<<16)|x, then (h<<16)|w.
+    expect(buf.readUInt32LE(12)).toBe(0);
+    expect(buf.readUInt16LE(16)).toBe(512);
+    expect(buf.readUInt16LE(18)).toBe(3);
+    unlinkSync(file);
+
+    // And the text template comes out as something a compiler would accept.
+    await p7.click('#btn-export');
+    await p7.selectOption('#ex-what', 'text');
+    const [dl2] = await Promise.all([p7.waitForEvent('download'), p7.click('#ex-run')]);
+    const hfile = join(tmpdir(), `clutter-e2e-${Date.now()}.h`);
+    await dl2.saveAs(hfile);
+    const text = readFileSync(hfile, 'utf8');
+    expect(text).toMatch(/#define [A-Z_][A-Z0-9_]*_WIDTH 32/);
+    expect(text).toMatch(/#define [A-Z_][A-Z0-9_]*_FRAME_COUNT 5/);
+    expect(text).not.toMatch(/\{\{/);
+    unlinkSync(hfile);
+    await p7.close();
+  }, 90_000);
+});
+
 describe('the frame transforms', () => {
   it('set-for-all writes one colour across every frame, and copy-from stays per frame', async () => {
     const p4 = await browser.newPage({ viewport: { width: 1400, height: 900 } });

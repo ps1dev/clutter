@@ -59,6 +59,18 @@ import {
 } from './core/generators.js';
 import { paletteLut, composeInto, createImageBuffer } from './core/compose.js';
 import {
+  clutLayout,
+  DEFAULT_TEMPLATE,
+  ExportError,
+  exportClt,
+  exportMultiClutTim,
+  exportPaletteSequence,
+  exportRawImage,
+  paletteStride,
+  renderTemplate,
+  type ExportSource,
+} from './core/export.js';
+import {
   formatProjectJson,
   parseProject,
   ProjectError,
@@ -476,6 +488,19 @@ async function openProject(file: File): Promise<void> {
 let projectName = 'clutter';
 
 /**
+ * Hand a file to the browser. The tool is one HTML file with no server behind
+ * it, so the download path is the only way anything leaves.
+ */
+function download(name: string, blob: Blob): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
  * Save, and clear the dirty flag - the one thing that was armed with nothing to
  * disarm it. Downloads rather than writing anywhere: the tool is a single HTML
  * file with no server behind it, so the browser's own download path is the only
@@ -495,19 +520,147 @@ function saveProject(): void {
     indices: state.indices,
     frames: state.animation.frames.map((f) => ({ hold: f.hold, palette: f.palette })),
   });
-  const blob = new Blob([formatProjectJson(doc)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${projectName}.clutter.json`;
-  a.click();
-  URL.revokeObjectURL(url);
+  const name = `${projectName}.clutter.json`;
+  download(name, new Blob([formatProjectJson(doc)], { type: 'application/json' }));
   state.dirty = false;
-  setStatus(`Saved ${a.download}: ${state.animation.frames.length} frames.`);
+  setStatus(`Saved ${name}: ${state.animation.frames.length} frames.`);
   renderFrameStrip();
 }
 
 $<HTMLButtonElement>('btn-save').addEventListener('click', saveProject);
+
+// ---------------------------------------------------------------------------
+// Export
+// ---------------------------------------------------------------------------
+
+const dlgExport = $<HTMLDialogElement>('dlg-export');
+const exWhat = $<HTMLSelectElement>('ex-what');
+const exPerRow = $<HTMLInputElement>('ex-per-row');
+const exClutRow = $('ex-clut-row');
+const exTemplateRow = $('ex-template-row');
+const exTemplate = $<HTMLTextAreaElement>('ex-template');
+const exNote = $('ex-note');
+
+exTemplate.value = DEFAULT_TEMPLATE;
+
+function exportSource(): ExportSource | null {
+  if (!state.animation || !state.indices) return null;
+  return {
+    fmt: formatById(state.animation.formatId),
+    width: state.imageW,
+    height: state.imageH,
+    indices: state.indices,
+    frames: state.animation.frames.map((f) => ({ palette: f.palette, hold: f.hold })),
+    loopStart: state.animation.loopStart,
+    fps: state.animation.fps,
+    name: projectName,
+  };
+}
+
+/**
+ * Say what the export will actually produce, in bytes and - for the CLUT
+ * paths - in VRAM dimensions.
+ *
+ * The dimensions matter more than they look: at 8bpp one palette is already
+ * 256 halfwords, a quarter of VRAM's width, so two per row is half the machine
+ * and four is all of it. Better to see the block's shape here than to discover
+ * it after the file has landed somewhere.
+ */
+function updateExportNote(): void {
+  try {
+    describeExport();
+  } catch (err) {
+    // The note calls the exporters to describe them, so a source the format
+    // cannot represent throws HERE, before the dialog is even open. Caught and
+    // shown, because "this image is 17 pixels wide and 4bpp packs two per
+    // byte" is exactly what you want the dialog to say rather than a button
+    // that silently does nothing.
+    exNote.textContent = err instanceof ExportError ? err.message : (err as Error).message;
+  }
+}
+
+function describeExport(): void {
+  const src = exportSource();
+  const what = exWhat.value;
+  const isClut = what === 'tim' || what === 'clt';
+  exClutRow.classList.toggle('hidden', !isClut);
+  exTemplateRow.classList.toggle('hidden', what !== 'text');
+  if (!src) {
+    exNote.textContent = 'Nothing loaded.';
+    return;
+  }
+  if (isClut && src.fmt.id !== 'rgb5551') {
+    exNote.textContent = `TIM and CLT are RGB5551 only; the palette is currently ${src.fmt.label}.`;
+    return;
+  }
+  const size = state.animation!.paletteSize;
+  if (isClut) {
+    const l = clutLayout(size, src.frames.length, Number(exPerRow.value) || 1);
+    const bpp = l.slots === 16 ? 4 : 8;
+    exNote.textContent =
+      `${bpp}bpp. CLUT block ${l.width}x${l.height} halfwords, ` +
+      `${l.perRow} palette${l.perRow === 1 ? '' : 's'} per row, ${l.slots} slots each` +
+      (l.width > 1024 ? ' - WIDER THAN VRAM.' : '.');
+    return;
+  }
+  if (what === 'raw') {
+    exNote.textContent = `${exportRawImage(src).length} bytes, ${src.width}x${src.height}.`;
+    return;
+  }
+  if (what === 'palettes') {
+    const stride = paletteStride(src.fmt, size);
+    exNote.textContent = `${src.frames.length} palettes of ${stride} bytes, ${stride * src.frames.length} total.`;
+    return;
+  }
+  exNote.textContent = 'Placeholders are substituted per export; unknown ones are left alone.';
+}
+
+$<HTMLButtonElement>('btn-export').addEventListener('click', () => {
+  updateExportNote();
+  dlgExport.showModal();
+});
+exWhat.addEventListener('change', updateExportNote);
+exPerRow.addEventListener('input', updateExportNote);
+
+$<HTMLButtonElement>('ex-run').addEventListener('click', (ev) => {
+  ev.preventDefault();
+  const src = exportSource();
+  if (!src) {
+    setStatus('Nothing to export yet.');
+    return;
+  }
+  const perRow = Math.max(1, Math.round(Number(exPerRow.value)) || 1);
+  try {
+    switch (exWhat.value) {
+      case 'raw':
+        download(`${src.name}.bin`, blobOf(exportRawImage(src)));
+        break;
+      case 'palettes':
+        download(`${src.name}.pal`, blobOf(exportPaletteSequence(src)));
+        break;
+      case 'tim':
+        download(`${src.name}.tim`, blobOf(exportMultiClutTim(src, { palettesPerRow: perRow })));
+        break;
+      case 'clt':
+        download(`${src.name}.clt`, blobOf(exportClt(src, { palettesPerRow: perRow })));
+        break;
+      default:
+        download(
+          `${src.name}.h`,
+          new Blob([renderTemplate(exTemplate.value, src)], { type: 'text/plain' }),
+        );
+    }
+  } catch (err) {
+    const why = err instanceof ExportError ? err.message : (err as Error).message;
+    setStatus(`Export failed: ${why}`);
+    return;
+  }
+  dlgExport.close();
+  setStatus(`Exported ${exWhat.options[exWhat.selectedIndex].text}.`);
+});
+
+const blobOf = (bytes: Uint8Array): Blob =>
+  new Blob([bytes as unknown as BlobPart], { type: 'application/octet-stream' });
 
 interface PendingImport {
   image: DecodedPng;

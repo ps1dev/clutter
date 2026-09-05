@@ -13,6 +13,7 @@
     <label>Import <input type="file" id="file-png" accept="image/png,application/json,.json" class="hidden"></label>
     <button id="btn-import" title="A PNG to import, or a .clutter.json project to open">Open&hellip;</button>
     <button id="btn-save" title="Save the project as JSON">Save</button>
+    <button id="btn-export" title="Export image data, palettes, a TIM or a text template">Export&hellip;</button>
     <span class="sep"></span>
     <button id="open-format" title="Change colour format">Format&hellip;</button>
     <span class="sep"></span>
@@ -217,6 +218,34 @@
   </div>
   <p class="note" id="ph-note"></p>
   <button id="ph-run">Shift</button>
+</dialog>
+
+<dialog id="dlg-export" class="generator-dialog">
+  <form method="dialog"><button class="dlg-close" aria-label="Close">&times;</button></form>
+  <h3>Export</h3>
+  <div class="row">
+    <label>what
+      <select id="ex-what">
+        <option value="raw">raw image data</option>
+        <option value="palettes">palette sequence</option>
+        <option value="tim">multi-palette .tim</option>
+        <option value="clt">palettes only .clt</option>
+        <option value="text">text template</option>
+      </select>
+    </label>
+  </div>
+  <div class="row ps1-only" id="ex-clut-row">
+    <label title="Palettes placed side by side before wrapping to the row below. 1 stacks them vertically.">palettes per row
+      <input type="number" id="ex-per-row" min="1" max="256" step="1" value="1">
+    </label>
+  </div>
+  <div class="row" id="ex-template-row">
+    <label style="flex:1">template
+      <textarea id="ex-template" rows="8" spellcheck="false" style="width:100%"></textarea>
+    </label>
+  </div>
+  <p class="note" id="ex-note"></p>
+  <button id="ex-run">Export</button>
 </dialog>
 
 <script type="module" src="./src/main.ts"></script>
