@@ -17,9 +17,7 @@
  * exactly because it is already quantized. Storing 0-255 instead would read
  * more familiarly and would re-quantize on load, which is the thing this
  * format exists to avoid.
- *
- * Version 1 stored packed integers instead. Still read, because files saved by
- * that build exist; a number where an array is expected is unambiguous.
+
  *
  * ⚠ A PROJECT FILE IS DATA FROM DISK AND IS VALIDATED AS SUCH. Nothing in here
  * trusts a field: lengths are cross-checked against each other, indices against
@@ -45,7 +43,7 @@ function fail(what: string): never {
 }
 
 export const PROJECT_KIND = 'clutter-project';
-export const PROJECT_VERSION = 2;
+export const PROJECT_VERSION = 1;
 
 /** `[r, g, b]`, `[r, g, b, a]` or `[r, g, b, stp]`, in the format's own units. */
 export type ProjectEntry = (number | boolean)[];
@@ -53,8 +51,8 @@ export type ProjectEntry = (number | boolean)[];
 export interface ProjectFrame {
   /** Ticks this frame stays up. */
   hold: number;
-  /** One tuple per entry. Version 1 files carry packed integers here instead. */
-  palette: (ProjectEntry | number)[];
+  /** One tuple per entry. */
+  palette: ProjectEntry[];
 }
 
 export interface ProjectFile {
@@ -246,10 +244,7 @@ export function parseProject(text: string): LoadedProject {
     const fr = f as Record<string, unknown>;
     if (!Array.isArray(fr.palette)) fail(`frame ${i} has no palette array`);
     const palette = (fr.palette as unknown[]).map((v, k) => {
-      // A version-1 file stores a packed integer here. Unambiguous against a
-      // tuple, so both are read rather than making old files unopenable.
-      if (typeof v === 'number') return fmt.unpack(v & 0xffff);
-      if (!Array.isArray(v)) fail(`frame ${i} entry ${k} is neither a tuple nor a packed number`);
+      if (!Array.isArray(v)) fail(`frame ${i} entry ${k} is not a [r, g, b] tuple`);
       return tupleToEntry(fmt, v as ProjectEntry, `frame ${i} entry ${k}`);
     });
     const hold = typeof fr.hold === 'number' && fr.hold >= 1 ? Math.round(fr.hold) : 1;

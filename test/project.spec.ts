@@ -79,20 +79,6 @@ describe('round trip', () => {
     expect(p888.frames[0].palette[0]).toEqual([255, 0, 0, 255]);
   });
 
-  it('still reads a version 1 file, which stored packed integers', () => {
-    const doc = serializeProject(sample()) as unknown as Record<string, unknown>;
-    const fmt = formatById('rgb5551');
-    doc.version = 1;
-    doc.frames = sample().frames.map((f) => ({
-      hold: f.hold,
-      palette: f.palette.map((e) => fmt.pack(e)),
-    }));
-    const out = parseProject(JSON.stringify(doc));
-    expect(out.frames[0].palette.map((x) => fmt.pack(x))).toEqual(
-      sample().frames[0].palette.map((x) => fmt.pack(x)),
-    );
-  });
-
   it('lets a hand-written tuple leave off the trailing member', () => {
     const doc = serializeProject(sample()) as unknown as Record<string, unknown>;
     (doc.frames as { palette: unknown[] }[])[0].palette = [[31, 0, 0], [0, 31, 0], [0, 0, 31]];
@@ -148,7 +134,7 @@ describe('a project file is data from disk and is validated as such', () => {
   });
 
   it('rejects a version it cannot read, naming both numbers', () => {
-    expect(why(mangle((o) => (o.version = 99)))).toMatch(/unsupported version 99.*up to 2/);
+    expect(why(mangle((o) => (o.version = 99)))).toMatch(/unsupported version 99.*up to 1/);
   });
 
   it('rejects an unknown colour format', () => {

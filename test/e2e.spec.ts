@@ -309,7 +309,7 @@ describe('project save and load', () => {
     // Palettes are tuples in the format's own units: five bits a channel plus
     // the STP boolean in rgb5551. Asserting the SHAPE is what catches a silent
     // reversion to packed words or to 0-255 channels.
-    expect(doc.version).toBe(2);
+    expect(doc.version).toBe(1);
     for (const t of doc.frames[0].palette) {
       expect(Array.isArray(t)).toBe(true);
       expect(t).toHaveLength(4);
