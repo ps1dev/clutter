@@ -306,10 +306,18 @@ describe('project save and load', () => {
     expect(doc.fps).toBe(24);
     expect(doc.frames).toHaveLength(3);
     expect(doc.width * doc.height).toBe(32 * 24);
-    // Palettes are stored as packed words, so every entry is a 16-bit integer.
-    for (const v of doc.frames[0].palette) {
-      expect(Number.isInteger(v)).toBe(true);
-      expect(v).toBeLessThanOrEqual(0xffff);
+    // Palettes are tuples in the format's own units: five bits a channel plus
+    // the STP boolean in rgb5551. Asserting the SHAPE is what catches a silent
+    // reversion to packed words or to 0-255 channels.
+    expect(doc.version).toBe(2);
+    for (const t of doc.frames[0].palette) {
+      expect(Array.isArray(t)).toBe(true);
+      expect(t).toHaveLength(4);
+      for (const c of t.slice(0, 3)) {
+        expect(Number.isInteger(c)).toBe(true);
+        expect(c).toBeLessThanOrEqual(31);
+      }
+      expect(typeof t[3]).toBe('boolean');
     }
 
     // Open it back in a clean page and compare what the UI reports.

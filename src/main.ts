@@ -59,6 +59,7 @@ import {
 } from './core/generators.js';
 import { paletteLut, composeInto, createImageBuffer } from './core/compose.js';
 import {
+  formatProjectJson,
   parseProject,
   ProjectError,
   serializeProject,
@@ -494,7 +495,7 @@ function saveProject(): void {
     indices: state.indices,
     frames: state.animation.frames.map((f) => ({ hold: f.hold, palette: f.palette })),
   });
-  const blob = new Blob([JSON.stringify(doc, null, 1)], { type: 'application/json' });
+  const blob = new Blob([formatProjectJson(doc)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
