@@ -104,6 +104,11 @@ input[type='range'] {
   position: relative;
   background: #07090b;
   overflow: hidden;
+  min-height: 0;
+}
+#canvas-wrap.drop-target {
+  outline: 2px dashed var(--accent);
+  outline-offset: -6px;
 }
 #canvas {
   display: block;
@@ -272,6 +277,9 @@ input[type='range'] {
 #strip-canvas {
   display: block;
   width: 100%;
+  /* Overridden by the widget on its first draw. Present so the canvas never
+     falls back to its intrinsic 2:1 ratio and claims the viewport's row. */
+  height: 74px;
   cursor: crosshair;
 }
 #frame-strip-controls {

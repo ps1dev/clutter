@@ -85,6 +85,14 @@ export function truncateChannel(v: number, bits: number): number {
 }
 
 /** The quantized level (not the expanded byte) of an 8-bit channel at `bits`. */
+/** Expand a quantized level back to an 8-bit channel value. */
+export function fromLevel(level: number, bits: number): number {
+  if (bits >= 8) return Math.max(0, Math.min(255, Math.round(level)));
+  const max = (1 << bits) - 1;
+  const n = Math.max(0, Math.min(max, Math.round(level)));
+  return Math.round((n * 255) / max);
+}
+
 export function levelOf(v: number, bits: number): number {
   if (bits >= 8) return clamp255(v);
   const max = (1 << bits) - 1;
@@ -184,7 +192,13 @@ const RGB5551: ColorFormat = {
   }),
   display(e) {
     const s = this.snap(e);
-    return { r: s.r, g: s.g, b: s.b, a: s.a };
+    // STP entries are drawn at half alpha. Strictly the flag only blends when
+    // the primitive is drawn with semi-transparency enabled, so this is a
+    // convention rather than a simulation - but an editor that renders a
+    // flagged entry identically to an unflagged one gives you no way to see
+    // which is which, and that was the complaint.
+    const a = s.a === 0 ? 0 : e.stp ? 128 : 255;
+    return { r: s.r, g: s.g, b: s.b, a };
   },
   diagnose(e) {
     if (this.pack(e) === PS1_TRANSPARENT) {

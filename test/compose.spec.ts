@@ -46,12 +46,24 @@ describe('paletteLut', () => {
     expect(buf.data[3]).toBe(0);
   });
 
-  it('leaves STP black opaque', () => {
+  it('renders an STP entry at half alpha, distinct from both opaque and transparent', () => {
+    // Changed 2026-09-05 on spicyjpeg's ask: a flagged entry drawn identically
+    // to an unflagged one gives no way to see which is which. Half alpha is a
+    // convention - the flag only blends when the primitive enables it - so the
+    // assertion that matters is that all THREE states are distinguishable.
     const fmt = formatById('rgb5551');
-    const lut = paletteLut(fmt, [e(0, 0, 0, 255, true)], 1);
-    const buf = buffer(1);
-    new Uint32Array(buf.data.buffer)[0] = lut[0];
-    expect(buf.data[3]).toBe(255);
+    const alphaOf = (entry: Entry): number => {
+      const buf = buffer(1);
+      new Uint32Array(buf.data.buffer)[0] = paletteLut(fmt, [entry], 1)[0];
+      return buf.data[3];
+    };
+    const stp = alphaOf(e(0, 0, 0, 255, true));
+    const opaque = alphaOf(e(255, 255, 255, 255));
+    const transparent = alphaOf(e(0, 0, 0, 255));
+    expect(stp).toBe(128);
+    expect(opaque).toBe(255);
+    expect(transparent).toBe(0);
+    expect(new Set([stp, opaque, transparent]).size).toBe(3);
   });
 
   it('paints indices past the end of the palette as transparent', () => {

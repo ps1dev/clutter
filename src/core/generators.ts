@@ -158,6 +158,14 @@ export interface CycleEntriesOptions {
   indices: number[];
   direction?: CycleDirection;
   steps?: number;
+  /**
+   * Skip step 0, which is the base palette unchanged.
+   *
+   * The frame you started from already exists in the animation, so emitting it
+   * again inserts a duplicate next to itself. With this set, a full loop of N
+   * entries is N-1 new frames and the original makes up the Nth.
+   */
+  skipFirst?: boolean;
 }
 
 /**
@@ -173,9 +181,10 @@ export function cycleEntries(opts: CycleEntriesOptions): Entry[][] {
   const dir = opts.direction ?? 'forward';
   const len = idx.length;
   if (len <= 1) return [copy(base)];
-  const steps = Math.max(1, opts.steps ?? len);
+  const first = opts.skipFirst ? 1 : 0;
+  const steps = Math.max(1, opts.steps ?? (opts.skipFirst ? len - 1 : len));
   const out: Entry[][] = [];
-  for (let k = 0; k < steps; k++) {
+  for (let k = first; k < first + steps; k++) {
     const pal = copy(base);
     for (let i = 0; i < len; i++) {
       const shift = dir === 'forward' ? i - k : i + k;

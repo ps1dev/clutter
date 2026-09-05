@@ -468,6 +468,11 @@ export class TimelineView {
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d')!;
+    // Claim the widget's real height immediately. A canvas with no height set
+    // falls back to its intrinsic 300x150 ratio, so at 1400px wide it asks for
+    // 700px of layout and swallows the row the image viewport lives in - which
+    // showed up as "the import hint collapses into a zero-height div".
+    this.canvas.style.height = `${timelineLayout([], 1).height}px`;
     this._bind();
   }
 
@@ -516,11 +521,21 @@ export class TimelineView {
   setView(start: number, end: number): void {
     const total = Math.max(MIN_WINDOW_TICKS, this.totalTicks);
     const w = Math.max(1, this.cssWidth);
+    // The window length is bounded by the px-per-tick limits ONLY. Capping it
+    // at the content length was two bugs at once: you could not zoom out far
+    // enough to see the animation sitting inside the widget, and a zoom-out
+    // request that hit the cap moved only the start, so the vertical wheel
+    // silently behaved like a pan.
     const minLen = w / MAX_PX_PER_TICK;
-    const maxLen = Math.max(minLen, Math.min(total, w / MIN_PX_PER_TICK));
+    const maxLen = Math.max(minLen, w / MIN_PX_PER_TICK);
     const len = Math.max(minLen, Math.min(maxLen, end - start));
+    // Overscroll is half a window past either end of the CONTENT. When the
+    // window is longer than the content the two bounds cross, so order them
+    // rather than letting min/max silently pick one.
     const slack = len * OVERSCROLL;
-    this.viewStartTick = Math.max(-slack, Math.min(total - len + slack, start));
+    const loBound = Math.min(-slack, total - len + slack);
+    const hiBound = Math.max(-slack, total - len + slack);
+    this.viewStartTick = Math.max(loBound, Math.min(hiBound, start));
     this.viewEndTick = this.viewStartTick + len;
     this.onView?.();
     this.requestDraw();

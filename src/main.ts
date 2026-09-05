@@ -15,7 +15,8 @@ import {
   FORMATS,
   formatById,
   countStalledFrames,
-  truncateChannel,
+  fromLevel,
+  levelOf,
   type ColorFormat,
   type Entry,
   type FormatId,
@@ -153,6 +154,7 @@ for (const [btn, dlg] of [
 }
 
 const statusFrames = $('s-frames');
+const statusHoverFrame = $('s-frame');
 const statusLoop = $('s-loop');
 const statusHover = $('s-hover');
 const statusMsg = $('s-msg');
@@ -174,6 +176,8 @@ interface AppState {
   view: ViewState;
   hover: { x: number; y: number } | null;
   playing: boolean;
+  /** Where the playhead sits, in ticks. */
+  playheadTick: number;
 }
 
 const state: AppState = {
@@ -189,6 +193,7 @@ const state: AppState = {
   view: { originX: 0, originY: 0, scale: 1 },
   hover: null,
   playing: false,
+  playheadTick: 0,
 };
 
 const paletteCanvas = $<HTMLCanvasElement>('palette-canvas');
@@ -413,10 +418,22 @@ formatSelect.addEventListener('change', () => {
     const b = newFmt.display(e);
     if (a.r !== b.r || a.g !== b.g || a.b !== b.b || a.a !== b.a) changed++;
   }
-  state.animation = { ...state.animation, formatId: newId };
+  // Re-quantize for real, rather than keeping 8-bit values and snapping only
+  // for display. spicyjpeg's call: the sliders now speak the format's own
+  // levels, so the stored value has to BE that level or the two disagree.
+  // The trade, said out loud because it is a one-way door: switching to a
+  // narrower format and back no longer round-trips.
+  state.animation = {
+    ...state.animation,
+    formatId: newId,
+    frames: state.animation.frames.map((f) => ({
+      ...f,
+      palette: f.palette.map((e) => newFmt.snap(e)),
+    })),
+  };
   formatChangeNote.textContent =
     changed > 0
-      ? `${changed} of ${frame.palette.length} entries change appearance in this format`
+      ? `${changed} of ${frame.palette.length} entries re-quantized for this format`
       : 'no visible change in this format';
 
   refreshAll();
@@ -476,11 +493,20 @@ window.addEventListener('keydown', (e) => {
       selectFrame(Math.min(state.animation.frames.length - 1, state.currentFrame + 1));
       break;
     case 'Delete':
+      // Delete takes the selection when there is one; backspace is the
+      // always-just-this-frame escape hatch.
+      stopPlayback();
+      fDelete.click();
+      break;
+    case 'Backspace': {
       stopPlayback();
       if (state.animation.frames.length <= 1) return;
-      state.animation = deleteFrame(state.animation, state.currentFrame);
-      selectFrame(Math.min(state.animation.frames.length - 1, state.currentFrame));
+      const at = state.currentFrame;
+      state.animation = deleteFrame(state.animation, at);
+      frameSpan = null;
+      selectFrame(Math.min(state.animation.frames.length - 1, at));
       break;
+    }
     default:
       return;
   }
@@ -583,12 +609,20 @@ function packedHex(fmt: ColorFormat, e: Entry): string {
   return `0x${v.toString(16).padStart(digits, '0')}`;
 }
 
-function configureChannelSteps(fmt: ColorFormat): void {
-  const stepFor = (bits: number): number => (bits <= 0 || bits >= 8 ? 1 : Math.max(1, Math.round(255 / ((1 << bits) - 1))));
-  $<HTMLInputElement>('e-r-range').step = String(stepFor(fmt.channelBits.r));
-  $<HTMLInputElement>('e-g-range').step = String(stepFor(fmt.channelBits.g));
-  $<HTMLInputElement>('e-b-range').step = String(stepFor(fmt.channelBits.b));
-  $<HTMLInputElement>('e-a-range').step = String(stepFor(fmt.channelBits.a));
+function configureChannelRanges(fmt: ColorFormat): void {
+  const set = (numId: string, rangeId: string, bits: number): void => {
+    const max = bits >= 8 ? 255 : (1 << bits) - 1;
+    for (const id of [numId, rangeId]) {
+      const el = $<HTMLInputElement>(id);
+      el.min = '0';
+      el.max = String(max);
+      el.step = '1';
+    }
+  };
+  set('e-r', 'e-r-range', fmt.channelBits.r);
+  set('e-g', 'e-g-range', fmt.channelBits.g);
+  set('e-b', 'e-b-range', fmt.channelBits.b);
+  set('e-a', 'e-a-range', fmt.hasAlpha ? fmt.channelBits.a : 8);
 }
 
 function setChannelUi(numId: string, rangeId: string, v: number): void {
@@ -609,14 +643,14 @@ function renderEntryEditor(): void {
   }
 
   entryEditor.classList.remove('hidden');
-  configureChannelSteps(fmt);
+  configureChannelRanges(fmt);
 
-  setChannelUi('e-r', 'e-r-range', entry.r);
-  setChannelUi('e-g', 'e-g-range', entry.g);
-  setChannelUi('e-b', 'e-b-range', entry.b);
+  setChannelUi('e-r', 'e-r-range', levelOf(entry.r, fmt.channelBits.r));
+  setChannelUi('e-g', 'e-g-range', levelOf(entry.g, fmt.channelBits.g));
+  setChannelUi('e-b', 'e-b-range', levelOf(entry.b, fmt.channelBits.b));
 
   eARow.classList.toggle('hidden', !fmt.hasAlpha);
-  if (fmt.hasAlpha) setChannelUi('e-a', 'e-a-range', entry.a);
+  if (fmt.hasAlpha) setChannelUi('e-a', 'e-a-range', levelOf(entry.a, fmt.channelBits.a));
 
   eStpRow.classList.toggle('hidden', !fmt.hasStp);
   if (fmt.hasStp) eStp.checked = !!entry.stp;
@@ -628,14 +662,30 @@ function renderEntryEditor(): void {
   eDiagnose.classList.toggle('hidden', !warn);
 }
 
+/** Every entry an edit should touch: the whole selection, else the edited one. */
+function editTargets(): number[] {
+  if (state.selected.size > 1) return [...state.selected].sort((a, b) => a - b);
+  return state.editingIndex === null ? [] : [state.editingIndex];
+}
+
+/**
+ * `raw` is a LEVEL in the format's own units - 0-31 for a 5-bit channel, 0-63
+ * for RGB565's green - not a 0-255 byte. Remapping every channel to 0-255 hid
+ * the format from the one control where it matters most: a slider with 256
+ * positions that can only produce 32 colours is lying about what you are
+ * editing.
+ */
 function applyChannelEdit(channel: 'r' | 'g' | 'b' | 'a', raw: number): void {
-  if (!state.animation || state.editingIndex === null) return;
+  if (!state.animation) return;
   const fmt = formatById(state.animation.formatId);
   const bits = fmt.channelBits[channel];
-  const snapped = truncateChannel(raw, bits >= 8 ? 8 : bits);
-  const frame = state.animation.frames[state.currentFrame];
-  const entry = { ...frame.palette[state.editingIndex], [channel]: snapped };
-  state.animation = setEntry(state.animation, state.currentFrame, state.editingIndex, entry);
+  const value = fromLevel(raw, bits >= 8 ? 8 : bits);
+  for (const i of editTargets()) {
+    const frame = state.animation.frames[state.currentFrame];
+    const cur = frame.palette[i];
+    if (!cur) continue;
+    state.animation = setEntry(state.animation, state.currentFrame, i, { ...cur, [channel]: value });
+  }
   refreshAll();
 }
 
@@ -652,10 +702,12 @@ wireChannelInputs('e-b', 'e-b-range', 'b');
 wireChannelInputs('e-a', 'e-a-range', 'a');
 
 eStp.addEventListener('change', () => {
-  if (!state.animation || state.editingIndex === null) return;
-  const frame = state.animation.frames[state.currentFrame];
-  const entry = { ...frame.palette[state.editingIndex], stp: eStp.checked };
-  state.animation = setEntry(state.animation, state.currentFrame, state.editingIndex, entry);
+  if (!state.animation) return;
+  for (const i of editTargets()) {
+    const cur = state.animation.frames[state.currentFrame].palette[i];
+    if (!cur) continue;
+    state.animation = setEntry(state.animation, state.currentFrame, i, { ...cur, stp: eStp.checked });
+  }
   refreshAll();
 });
 
@@ -683,19 +735,26 @@ function renderFrameStrip(): void {
   const anim = state.animation;
   statusFrames.textContent = `${anim.frames.length} frame${anim.frames.length === 1 ? '' : 's'}`;
   const spanNote = frameSpan ? `, ${frameSpan[1] - frameSpan[0] + 1} selected` : '';
+  statusHoverFrame.textContent = `frame ${state.currentFrame}`;
   statusLoop.textContent =
     (anim.loopStart !== null ? `loops at ${anim.loopStart}` : 'no loop') + spanNote;
 
   timeline.current = state.currentFrame;
   timeline.loopStart = anim.loopStart;
   timeline.selection = frameSpan;
-  timeline.playheadTick = state.playing ? tickForFrame(anim, state.currentFrame) : null;
+  // The playhead is the ONLY marker for where you are, now that the
+  // current-frame border is gone, so it has to sit exactly where you put it.
+  // Deriving it from the current frame snapped it back to that frame's left
+  // edge, which reads as landing on the previous frame when you click near a
+  // boundary - reported as "scrubbing is off by half a frame".
+  timeline.playheadTick = state.playheadTick;
   timeline.setContent({ frames: anim.frames, fmt: formatById(anim.formatId) });
 }
 
 timeline.onScrub = (tick) => {
   if (!state.animation) return;
   stopPlayback();
+  state.playheadTick = Math.max(0, tick);
   let acc = 0;
   for (let i = 0; i < state.animation.frames.length; i++) {
     acc += Math.max(1, state.animation.frames[i].hold);
@@ -705,6 +764,7 @@ timeline.onScrub = (tick) => {
 };
 timeline.onSelectFrame = (i) => {
   stopPlayback();
+  state.playheadTick = tickForFrame(state.animation!, i);
   selectFrame(i);
 };
 timeline.onSelectSpan = (span) => {
@@ -726,7 +786,11 @@ function targetSpan(): [number, number] {
 function selectFrame(i: number): void {
   if (!state.animation) return;
   if (i < 0 || i >= state.animation.frames.length) return;
+  const wasFrame = frameAtPlayhead();
   state.currentFrame = i;
+  // Only re-seat the playhead if it was not already inside this frame, so a
+  // mid-frame scrub is not yanked to the frame's edge by its own selectFrame.
+  if (wasFrame !== i) state.playheadTick = tickForFrame(state.animation, i);
   fHold.value = String(state.animation.frames[i].hold);
   refreshAll();
 }
@@ -863,8 +927,8 @@ function buildCycleRun(base: Entry[]) {
   const indices = [...state.selected].filter((i) => i >= 0 && i < base.length).sort((a, b) => a - b);
   const direction = gCycleDir.value as CycleDirection;
   const steps = Math.max(1, Math.round(Number(gCycleSteps.value)));
-  const params = { indices, direction, steps };
-  return { params, frames: cycleEntries({ base, indices, direction, steps }) };
+  const params = { indices, direction, steps, skipFirst: true };
+  return { params, frames: cycleEntries({ base, indices, direction, steps, skipFirst: true }) };
 }
 
 /** The frames a generator should transform, when a timeline span is selected. */
@@ -941,15 +1005,25 @@ function updateGeneratorNotes(): void {
   const span = spanFrames();
   const cycle = buildCycleRun(base);
   const nSel = cycle.params.indices.length;
-  const cycleOff = span !== null || nSel < 2;
-  gCycleRun.disabled = cycleOff;
-  $<HTMLInputElement>('g-cycle-steps').disabled = cycleOff;
-  gCycleTarget.textContent =
+  const why =
     span !== null
       ? 'Not available while a timeline span is selected: cycling rewrites the palette, it does not transform existing frames.'
       : nSel < 2
         ? 'Select two or more palette entries to cycle. A non-contiguous selection is cycled as if it were contiguous.'
-        : `Cycles the ${nSel} selected entries, in index order.`;
+        : '';
+  const cycleOff = why !== '';
+  gCycleRun.disabled = cycleOff;
+  // The reason rides on the button as a tooltip as well as in the panel text:
+  // a greyed control with the explanation somewhere else is a control you have
+  // to go looking for an explanation for.
+  gCycleRun.title = why;
+  $<HTMLInputElement>('g-cycle-steps').disabled = cycleOff;
+  gCycleTarget.textContent = why || `Cycles the ${nSel} selected entries, in index order.`;
+  if (!cycleOff && document.activeElement !== gCycleSteps) {
+    // A full loop of N entries is N-1 NEW frames: the one you started from is
+    // already in the animation and re-emitting it inserts a duplicate.
+    gCycleSteps.value = String(Math.max(1, nSel - 1));
+  }
 
   for (const id of ['hsb', 'fade']) {
     $(`g-${id}-steps-row`).classList.toggle('disabled', span !== null);
@@ -960,11 +1034,11 @@ function updateGeneratorNotes(): void {
     gCycleDistinct.textContent = '';
     cycleHighlight = null;
   } else {
-    const loop = nSel;
+    const loop = Math.max(1, nSel - 1);
     gCycleDistinct.textContent = runNote(
       fmt,
       cycle.frames,
-      `one full loop of ${nSel} entries is ${loop} step${loop === 1 ? '' : 's'}`,
+      `a full loop of ${nSel} entries is ${loop} new frame${loop === 1 ? '' : 's'} on top of this one`,
     );
   }
   const ci = cycle.params.indices;
@@ -1189,6 +1263,17 @@ window.addEventListener('resize', () => {
 // Playback
 // ---------------------------------------------------------------------------
 
+/** Which frame the playhead is currently inside. */
+function frameAtPlayhead(): number | null {
+  if (!state.animation) return null;
+  let acc = 0;
+  for (let i = 0; i < state.animation.frames.length; i++) {
+    acc += Math.max(1, state.animation.frames[i].hold);
+    if (state.playheadTick < acc) return i;
+  }
+  return state.animation.frames.length - 1;
+}
+
 function tickForFrame(anim: Animation, frameIndex: number): number {
   let t = 0;
   for (let i = 0; i < frameIndex && i < anim.frames.length; i++) t += Math.max(1, anim.frames[i].hold);
@@ -1244,7 +1329,12 @@ function tickLoop(now: number): void {
     state.currentFrame = frameIdx;
     composeAndDraw();
     timeline.current = state.currentFrame;
-    timeline.playheadTick = t;
+    // Wrapped, not raw: `t` keeps growing past the end of the animation, so
+    // after the first loop the playhead walked off the right-hand side and
+    // stopped appearing to move.
+    state.playheadTick = tick;
+    timeline.playheadTick = tick;
+    statusHoverFrame.textContent = `frame ${state.currentFrame}`;
     timeline.requestDraw();
     updatePaletteColors();
     renderEntryEditor();
@@ -1289,6 +1379,23 @@ draw();
 window.addEventListener('dragover', (e) => e.preventDefault());
 window.addEventListener('drop', (e) => {
   e.preventDefault();
+  canvasWrap.classList.remove('drop-target');
   const file = e.dataTransfer?.files?.[0];
   if (file) void importFile(file);
+});
+
+// The viewport is the drop target, and says so while you are over it. Dropping
+// anywhere still works; this is about the affordance, since an empty dark
+// rectangle does not look like somewhere you can drop a file.
+canvasWrap.addEventListener('dragenter', (e) => {
+  e.preventDefault();
+  canvasWrap.classList.add('drop-target');
+});
+canvasWrap.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+});
+canvasWrap.addEventListener('dragleave', (e) => {
+  if (e.relatedTarget && canvasWrap.contains(e.relatedTarget as Node)) return;
+  canvasWrap.classList.remove('drop-target');
 });

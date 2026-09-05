@@ -179,6 +179,27 @@ describe('truecolour import goes through the quantizer', () => {
     await page.locator('#palette-canvas').click({ position: { x: 16, y: 16 } });
     expect(await page.locator('#e-a-row').isVisible()).toBe(false);
     expect(await page.locator('#e-stp-row').isVisible()).toBe(true);
+
+    // The sliders speak the format's own levels, so a 5-bit channel has 32
+    // positions and not 256. Checked per format rather than once, because the
+    // interesting case is that they CHANGE.
+    const maxes = () =>
+      page.evaluate(() =>
+        ['e-r-range', 'e-g-range', 'e-b-range'].map(
+          (id) => (document.getElementById(id) as HTMLInputElement).max,
+        ),
+      );
+    expect(await maxes()).toEqual(['31', '31', '31']);
+
+    await page.selectOption('#format-select', 'rgb565');
+    await page.locator('#palette-canvas').click({ position: { x: 16, y: 16 } });
+    expect(await maxes()).toEqual(['31', '63', '31']);
+
+    await page.selectOption('#format-select', 'rgba8888');
+    await page.locator('#palette-canvas').click({ position: { x: 16, y: 16 } });
+    expect(await maxes()).toEqual(['255', '255', '255']);
+    expect(await page.locator('#e-a-row').isVisible()).toBe(true);
+    await page.selectOption('#format-select', 'rgb5551');
     await shot('03-quantized-5551');
   });
 });
@@ -227,6 +248,51 @@ describe('generating and playing', () => {
     expect(signatures.length).toBeGreaterThan(1);
     expect(new Set(signatures).size).toBeGreaterThan(1);
   });
+});
+
+describe('looping playback', () => {
+  it('keeps advancing past the first loop', async () => {
+    // Reported 2026-09-05: the playhead stopped updating after one pass,
+    // because the tick handed to the widget was the raw accumulating one and
+    // walked off the end instead of the wrapped one.
+    //
+    // Own page on purpose. The shared one carries whatever the earlier tests
+    // left behind - a frame count, a selection, an fps - and a timing test
+    // reading a stale animation fails for reasons that have nothing to do with
+    // the thing under test.
+    const p2 = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+    await p2.goto(`file://${DIST}`);
+    await p2.waitForSelector('#canvas');
+    await p2.setInputFiles('#file-png', resolve(ROOT, 'test/fixtures/indexed8-trns.png'));
+    await p2.waitForFunction(() => (document.querySelector('#s-msg')?.textContent ?? '').length > 0);
+    for (let i = 0; i < 3; i++) await p2.click('#f-duplicate');
+    await p2.fill('#fps-input', '20');
+    await p2.click('#canvas');
+    await p2.keyboard.press('Home');
+    await p2.click('#f-loop-set');
+    expect(await p2.textContent('#s-frames')).toBe('4 frames');
+    expect(await p2.textContent('#s-loop')).toMatch(/loops at 0/);
+
+    await p2.click('#btn-play');
+    // 37ms against a 50ms frame period, deliberately not a near-multiple: at
+    // 60ms the sampler aliased onto a rotating subset and missed a frame,
+    // which failed the test for a property of the SAMPLER.
+    const seen: string[] = [];
+    for (let i = 0; i < 40; i++) {
+      await p2.waitForTimeout(37);
+      seen.push(((await p2.textContent('#s-frame')) ?? '').replace('frame ', ''));
+    }
+    await p2.click('#btn-play');
+    await p2.close();
+
+    // The property is "it survives looping", so count WRAPS. A playhead that
+    // ran off the end after one pass gives at most one, and would still pass a
+    // "did it move at all" check.
+    let wraps = 0;
+    for (let i = 1; i < seen.length; i++) if (seen[i - 1] === '3' && seen[i] === '0') wraps++;
+    expect(new Set(seen).size).toBeGreaterThan(1);
+    expect(wraps).toBeGreaterThan(1);
+  }, 60_000);
 });
 
 describe('device pixel ratio', () => {
