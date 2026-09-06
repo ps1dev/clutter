@@ -4,7 +4,8 @@
  * What goes in, and why it is more than timweb keeps: the quantized indices,
  * because re-quantizing on load would give a different palette from the one
  * saved beside it; every frame's palette AND hold; and the metadata that makes
- * the animation mean anything - loop point, tick rate, colour format.
+ * the animation mean anything - loop mode, loop point, tick rate, colour
+ * format.
  *
  * PALETTES ARE STORED AS TUPLES IN THE FORMAT'S OWN UNITS, one per entry:
  *
@@ -25,6 +26,7 @@
  * gets a diagnostic naming the field, not a half-loaded editor.
  */
 
+import { isLoopMode, type LoopMode } from './animation.js';
 import {
   formatById,
   FORMATS,
@@ -60,7 +62,8 @@ export interface ProjectFile {
   version: number;
   colorFormat: FormatId;
   fps: number;
-  loopStart: number | null;
+  loopMode: LoopMode;
+  loopStart: number;
   width: number;
   height: number;
   /** base64 of one byte per pixel. */
@@ -163,7 +166,8 @@ export function formatProjectJson(doc: ProjectFile): string {
 export interface SerializeInput {
   colorFormat: FormatId;
   fps: number;
-  loopStart: number | null;
+  loopMode: LoopMode;
+  loopStart: number;
   width: number;
   height: number;
   indices: Uint8Array;
@@ -177,6 +181,7 @@ export function serializeProject(input: SerializeInput): ProjectFile {
     version: PROJECT_VERSION,
     colorFormat: input.colorFormat,
     fps: input.fps,
+    loopMode: input.loopMode,
     loopStart: input.loopStart,
     width: input.width,
     height: input.height,
@@ -191,7 +196,8 @@ export function serializeProject(input: SerializeInput): ProjectFile {
 export interface LoadedProject {
   colorFormat: FormatId;
   fps: number;
-  loopStart: number | null;
+  loopMode: LoopMode;
+  loopStart: number;
   width: number;
   height: number;
   indices: Uint8Array;
@@ -266,9 +272,19 @@ export function parseProject(text: string): LoadedProject {
     }
   }
 
-  let loopStart: number | null = null;
-  if (o.loopStart !== null && o.loopStart !== undefined) {
-    if (!Number.isInteger(o.loopStart)) fail('loopStart must be an integer or null');
+  // `loopMode` and `loopStart` are independent: the point is kept even while
+  // looping is off, so turning it back on in the editor restores what you had.
+  // An absent mode is `forward`, which is what a hand-written file that only
+  // says `loopStart` obviously means.
+  let loopMode: LoopMode = 'forward';
+  if (o.loopMode !== undefined) {
+    if (!isLoopMode(o.loopMode)) fail(`unknown loopMode ${JSON.stringify(o.loopMode)}`);
+    loopMode = o.loopMode;
+  }
+
+  let loopStart = 0;
+  if (o.loopStart !== undefined && o.loopStart !== null) {
+    if (!Number.isInteger(o.loopStart)) fail('loopStart must be an integer');
     const l = o.loopStart as number;
     if (l < 0 || l >= frames.length) fail(`loopStart ${l} is outside 0..${frames.length - 1}`);
     loopStart = l;
@@ -276,5 +292,5 @@ export function parseProject(text: string): LoadedProject {
 
   const fps = typeof o.fps === 'number' && o.fps > 0 && o.fps <= 1000 ? o.fps : 60;
 
-  return { colorFormat, fps, loopStart, width: width as number, height: height as number, indices, frames };
+  return { colorFormat, fps, loopMode, loopStart, width: width as number, height: height as number, indices, frames };
 }

@@ -16,6 +16,7 @@ function sample(): SerializeInput {
   return {
     colorFormat: 'rgb5551',
     fps: 30,
+    loopMode: 'pingpong',
     loopStart: 1,
     width: 4,
     height: 2,
@@ -107,8 +108,16 @@ describe('round trip', () => {
     expect(out.frames[1].palette[0].stp).toBe(false);
   });
 
-  it('accepts a null loop point', () => {
-    expect(round({ ...sample(), loopStart: null }).loopStart).toBeNull();
+  it('round-trips the loop mode', () => {
+    expect(round(sample()).loopMode).toBe('pingpong');
+    expect(round({ ...sample(), loopMode: 'none' }).loopMode).toBe('none');
+  });
+
+  it('keeps the loop point while looping is off, rather than discarding it', () => {
+    // The point and the mode are independent now: turning looping back on in
+    // the editor has to restore the point you had.
+    const out = round({ ...sample(), loopMode: 'none', loopStart: 1 });
+    expect(out.loopStart).toBe(1);
   });
 });
 

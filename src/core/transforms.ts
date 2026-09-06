@@ -25,6 +25,7 @@
  */
 
 import type { Entry } from '../shared/color.js';
+import { ease, type EasingId } from '../shared/easing.js';
 
 export type EdgeMode = 'wrap' | 'clamp';
 
@@ -119,12 +120,18 @@ export interface PhaseShiftOptions {
   /** Frames to shift the first selected entry by. May be negative. */
   shift: number;
   /**
-   * Extra frames of shift per selected entry, fractional allowed, FLOORED.
+   * Extra frames of shift per selected entry, fractional allowed, TRUNCATED
+   * TOWARDS ZERO.
    *
-   * spicyjpeg's worked example, which pins the rounding: base 2 with increment
+   * spicyjpeg's worked example pins the positive half: base 2 with increment
    * 0.5 shifts the first and second selected entries by 2 and the third and
-   * fourth by 3. floor(2 + k * 0.5) for k = 0..3 gives 2, 2, 3, 3. Rounding
+   * fourth by 3. trunc(2 + k * 0.5) for k = 0..3 gives 2, 2, 3, 3; rounding
    * would give 2, 3, 3, 4.
+   *
+   * His 2026-09-06 ruling pins the negative half too - "floor if positive and
+   * ceil if negative" - so a run of -0.5 mirrors it at -2, -2, -3, -3 rather
+   * than flooring away to -2, -3, -3, -4. The colour cycle truncates the same
+   * way; the two used to disagree.
    */
   increment?: number;
   edge?: EdgeMode;
@@ -133,7 +140,7 @@ export interface PhaseShiftOptions {
 /**
  * Slide selected entries along the TIME axis, each by its own amount.
  *
- * Entry k of the selection takes its colour from `floor(shift + k*increment)`
+ * Entry k of the selection takes its colour from `trunc(shift + k*increment)`
  * frames earlier, within the selected frame range. Everything outside the
  * selection is untouched, which is what makes this composable with the frame
  * span rather than being a whole-animation operation.
@@ -147,7 +154,7 @@ export function phaseShift(palettes: Palettes, sel: Selection, opts: PhaseShiftO
 
   for (let k = 0; k < sel.entries.length; k++) {
     const e = sel.entries[k];
-    const by = Math.floor(opts.shift + k * inc);
+    const by = Math.trunc(opts.shift + k * inc);
     for (let i = 0; i < n; i++) {
       const from = sel.frames[resolveIndex(i - by, n, edge)];
       const src = palettes[from]?.[e];
@@ -156,4 +163,89 @@ export function phaseShift(palettes: Palettes, sel: Selection, opts: PhaseShiftO
     }
   }
   return out;
+}
+
+/* ---------------------------------------------------------------------------
+ * Interpolate: the one tool here that changes the frame COUNT.
+ *
+ * Everything above rewrites the matrix in place. This inserts `count` new
+ * frames into every gap between adjacent selected frames, tweening the
+ * selected entries from the left frame's colour to the right frame's in RGB
+ * space. It replaced the old "fade to colour" tool on spicyjpeg's call: an HSB
+ * ramp with saturation and brightness multipliers already does what a fade to
+ * black or to grey did, and tweening between two frames you actually have is
+ * the operation that was missing.
+ *
+ * Unselected entries are COPIED FROM THE LEFT FRAME, his rule. That is what
+ * makes a partial selection usable: tween the four colours of a flame and the
+ * background holds still through the inserted frames instead of ghosting.
+ * ------------------------------------------------------------------------- */
+
+export interface InterpolateFramesOptions {
+  /** New frames to put in each gap. 0 is a no-op. */
+  count: number;
+  easing?: EasingId;
+}
+
+export interface InterpolateFramesResult<F> {
+  frames: F[];
+  /**
+   * Where each ORIGINAL frame ended up. The loop point and the cursor are
+   * indices into a list this operation just made longer, and re-deriving them
+   * by counting insertions at the call site is the same arithmetic done twice.
+   */
+  indexMap: number[];
+}
+
+/**
+ * Insert tween frames between adjacent selected frames.
+ *
+ * The selection is a contiguous run (see `resolveSelection`), so "adjacent
+ * pairs within the selection" and "adjacent pairs in the frame list, both ends
+ * selected" are the same set. Nothing is inserted before the first selected
+ * frame or after the last: N selected frames have N-1 gaps.
+ */
+export function interpolateFrames<F extends { palette: Entry[]; hold: number }>(
+  frames: F[],
+  sel: Selection,
+  opts: InterpolateFramesOptions,
+): InterpolateFramesResult<F> {
+  const count = Math.max(0, Math.floor(opts.count));
+  const indexMap = frames.map((_, i) => i);
+  if (count === 0 || sel.frames.length < 2) return { frames: frames.slice(), indexMap };
+
+  const gapAfter = new Set(sel.frames.slice(0, -1));
+  const out: F[] = [];
+  for (let i = 0; i < frames.length; i++) {
+    indexMap[i] = out.length;
+    const left = frames[i];
+    out.push(left);
+    if (!gapAfter.has(i)) continue;
+    const right = frames[i + 1];
+    if (!right) continue;
+    for (let j = 1; j <= count; j++) {
+      const t = ease(opts.easing, j / (count + 1));
+      // Start from a copy of the LEFT frame, so every entry outside the
+      // selection is already correct and only the selected ones are written.
+      const palette = left.palette.map((e) => ({ ...e }));
+      for (const e of sel.entries) {
+        const a = left.palette[e];
+        const b = right.palette[e];
+        if (!a || !b) continue;
+        palette[e] = {
+          ...a,
+          r: Math.round(a.r + (b.r - a.r) * t),
+          g: Math.round(a.g + (b.g - a.g) * t),
+          b: Math.round(a.b + (b.b - a.b) * t),
+          a: Math.round(a.a + (b.a - a.a) * t),
+        };
+      }
+      // `hold` and the STP flag come from the left frame. Neither has a
+      // meaningful midpoint - a boolean cannot be tweened, and splitting the
+      // hold would change how long the animation runs for, which is not what
+      // "insert frames between these two" asks for.
+      out.push({ ...left, palette, hold: left.hold, from: undefined } as F);
+    }
+  }
+  return { frames: out, indexMap };
 }

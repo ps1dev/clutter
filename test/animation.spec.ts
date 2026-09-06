@@ -11,18 +11,14 @@ import {
   setEntryAcrossFrames,
   setHold,
   setLoopStart,
+  setLoopMode,
+  loopOrder,
+  playbackAt,
   totalTicks,
   type Animation,
   type Frame,
 } from '../src/core/animation.js';
-import {
-  cycleEntries,
-  cycleRange,
-  hsvRamp,
-  hsvRampOver,
-  interpolateOver,
-  interpolateTo,
-} from '../src/core/generators.js';
+import { cycleEntries, cycleRange, hsvRamp, hsvRampOver } from '../src/core/generators.js';
 import { formatById, type Entry } from '../src/shared/color.js';
 
 const e = (r: number, g: number, b: number): Entry => ({ r, g, b, a: 255 });
@@ -99,8 +95,8 @@ describe('playback clock', () => {
     expect([0, 1, 2, 3, 4, 5].map((t) => frameAtTick(anim, t))).toEqual([0, 1, 1, 1, 1, 2]);
   });
 
-  it('stops at the end when there is no loop point', () => {
-    const anim = setLoopStart(withFrames(3), null);
+  it('stops at the end when looping is off', () => {
+    const anim = setLoopMode(withFrames(3), 'none');
     expect(frameAtTick(anim, 2)).toBe(2);
     // Null, not 2. Holding the last frame forever is not playback, and the two
     // are indistinguishable to a caller that only ever gets an index back.
@@ -156,14 +152,26 @@ describe('ramp step maths', () => {
   });
 
   it('open runs land exactly on the target', () => {
-    const out = interpolateTo({ base: [A], indices: [0], to: B, steps: 5, closed: false });
+    const out = hsvRamp({ base: [A], from: { val: 1 }, to: { val: 0 }, steps: 5, closed: false });
     expect(out[0][0]).toEqual(A);
-    expect(out[4][0]).toEqual({ ...B, stp: undefined, a: 255 });
+    expect(out[4][0]).toEqual({ ...A, r: 0, g: 0, b: 0 });
   });
 
-  it('a closed interpolation stops short of the target on purpose', () => {
-    const out = interpolateTo({ base: [A], indices: [0], to: B, steps: 5, closed: true });
-    expect(out[4][0]).not.toEqual(B);
+  it('a closed ramp stops short of the target on purpose', () => {
+    const out = hsvRamp({ base: [A], from: { val: 1 }, to: { val: 0 }, steps: 5, closed: true });
+    expect(out[4][0].r).toBeGreaterThan(0);
+  });
+
+  it('easing moves the middle of the ramp without moving its ends', () => {
+    const args = { base: [A], indices: [0], from: { val: 1 }, to: { val: 0 }, steps: 5, closed: false };
+    const lin = hsvRamp(args);
+    const quad = hsvRamp({ ...args, easing: 'quad-in' as const });
+    // Endpoints are the contract every curve keeps.
+    expect(quad[0][0]).toEqual(lin[0][0]);
+    expect(quad[4][0]).toEqual(lin[4][0]);
+    // ...and the interior is the discriminator. quad-in is below linear, so an
+    // eased fade to black is still brighter at the midpoint.
+    expect(quad[2][0].r).toBeGreaterThan(lin[2][0].r);
   });
 });
 
@@ -174,6 +182,7 @@ describe('editing across frames', () => {
     formatId: 'rgb5551',
     paletteSize: 4,
     frames: cycleRange({ base, lo: 0, hi: 2, steps: 3 }).map((p) => ({ palette: p, hold: 1 })),
+    loopMode: 'forward',
     loopStart: 0,
     fps: 60,
   };
@@ -256,19 +265,20 @@ describe('selection-driven generators', () => {
     expect(out[2][0].b).toBe(255);
   });
 
-  it('fades each frame from its own colour', () => {
+  it('darkens each frame from its own colour, which is what the fade tool used to do', () => {
+    // "Fade to colour" was removed 2026-09-06 on spicyjpeg's call because a
+    // brightness ramp already covers it. This is the replacement doing the job
+    // - each frame darkened from ITSELF, not from frame 0.
     const frames = [{ palette: [A] }, { palette: [B] }];
-    const out = interpolateOver({ frames, to: e(0, 0, 0), closed: false });
+    const out = hsvRampOver({ frames, from: { val: 1 }, to: { val: 0 }, closed: false });
     expect(out[0][0]).toEqual({ ...A });
-    // Fully faded to the target, whose alpha is 255 - the fade covers colour,
-    // not opacity, unless the target says otherwise.
     expect(out[1][0]).toEqual({ r: 0, g: 0, b: 0, a: 255 });
   });
 
   it('emits exactly one palette per input frame', () => {
     const frames = [{ palette: [A] }, { palette: [B] }, { palette: [C] }, { palette: [D] }];
-    expect(interpolateOver({ frames, to: A }).length).toBe(4);
     expect(hsvRampOver({ frames, from: {}, to: { hue: 180 } }).length).toBe(4);
+    expect(hsvRampOver({ frames, from: { sat: 1 }, to: { sat: 0 } }).length).toBe(4);
   });
 });
 
@@ -281,13 +291,26 @@ describe('fractional cycle increment', () => {
     expect(out.map(first)).toEqual([A, D, C, B]);
   });
 
+  const key = (e: Entry) => `${e.r},${e.g},${e.b}`;
+  const shiftsOf = (out: Entry[][]) => out.map((p) => base.findIndex((e) => key(e) === key(p[0])));
+
   it('holds for two frames at increment 0.5', () => {
     const out = cycleEntries({ base, indices: [0, 1, 2, 3], increment: 0.5, steps: 5 });
-    // round(k*0.5) is 0,1,1,2,2 - JS rounds .5 up, so step 1 already moves.
+    // trunc(k*0.5) is 0,0,1,1,2, so the first move lands on step 2. Rounding
+    // gave 0,1,1,2,2 and moved on step 1; spicyjpeg ruled for truncation
+    // 2026-09-06 so this and the phase shift agree.
     // Compare by value: the generator copies entries, so identity never matches.
-    const key = (e: Entry) => `${e.r},${e.g},${e.b}`;
-    const shifts = out.map((p) => base.findIndex((e) => key(e) === key(p[0])));
-    expect(shifts).toEqual([0, 3, 3, 2, 2]);
+    expect(shiftsOf(out)).toEqual([0, 0, 3, 3, 2]);
+  });
+
+  it('mirrors exactly on a negative increment, which is what TRUNCATION buys', () => {
+    // The assertion is the PROPERTY he named - truncate toward zero, so -0.5
+    // steps at the same moments as +0.5 and in the other direction - rather
+    // than a restatement of trunc(). Flooring passes the test above and fails
+    // this one: floor(k*-0.5) is 0,-1,-1,-2,-2, which moves a step early.
+    const pos = shiftsOf(cycleEntries({ base, indices: [0, 1, 2, 3], increment: 0.5, steps: 5 }));
+    const neg = shiftsOf(cycleEntries({ base, indices: [0, 1, 2, 3], increment: -0.5, steps: 5 }));
+    expect(neg).toEqual(pos.map((i) => (4 - i) % 4));
   });
 
   it('runs backwards on a negative increment', () => {
@@ -314,8 +337,8 @@ describe('a fractional cycle never re-emits the frame it started from', () => {
   const base = [A, B, C, D];
   const key = (pal: Entry[]) => pal.map((e) => `${e.r},${e.g},${e.b}`).join('|');
 
-  it('skips the leading steps a small increment rounds to zero', () => {
-    // round(1 * 0.3) is 0, so a naive k=1 start emits a copy of the base.
+  it('skips the leading steps a small increment truncates to zero', () => {
+    // trunc(1 * 0.3) is 0, so a naive k=1 start emits a copy of the base.
     for (const increment of [0.3, 0.25, 0.2, 0.1, -0.3, -0.15]) {
       const out = cycleEntries({ base, indices: [0, 1, 2, 3], increment, steps: 6, skipFirst: true });
       expect(key(out[0])).not.toBe(key(base));
@@ -333,5 +356,65 @@ describe('a fractional cycle never re-emits the frame it started from', () => {
     const out = cycleEntries({ base, indices: [0, 1, 2, 3], increment: 1, steps: 3, skipFirst: true });
     expect(key(out[0])).not.toBe(key(base));
     expect(out).toHaveLength(3);
+  });
+});
+
+describe('loop modes', () => {
+  // Four frames, hold 1 each, loop point at 1: frame 0 is an intro that plays
+  // once in every mode that loops at all.
+  const at = (anim: Animation, ticks: number[]) => ticks.map((t) => frameAtTick(anim, t));
+  const four = () => setLoopStart(withFrames(4), 1);
+
+  it('forward returns to the loop point', () => {
+    const anim = setLoopMode(four(), 'forward');
+    expect(loopOrder(anim)).toEqual([1, 2, 3]);
+    expect(at(anim, [0, 1, 2, 3, 4, 5, 6, 7])).toEqual([0, 1, 2, 3, 1, 2, 3, 1]);
+  });
+
+  it('backward runs the loop region in reverse after the intro', () => {
+    const anim = setLoopMode(four(), 'backward');
+    expect(loopOrder(anim)).toEqual([3, 2, 1]);
+    expect(at(anim, [0, 1, 2, 3, 4, 5, 6])).toEqual([0, 3, 2, 1, 3, 2, 1]);
+  });
+
+  it('ping-pong plays each end once per cycle, not twice', () => {
+    const anim = setLoopMode(four(), 'pingpong');
+    // 1,2,3,2 - not 1,2,3,3,2,1, which makes both ends linger for two holds
+    // and reads as a stutter at the turn.
+    expect(loopOrder(anim)).toEqual([1, 2, 3, 2]);
+    expect(at(anim, [1, 2, 3, 4, 5, 6, 7, 8])).toEqual([1, 2, 3, 2, 1, 2, 3, 2]);
+  });
+
+  it('ping-pong over a two-frame region is the same as forward', () => {
+    // There is no interior to reflect, so a,b,a,b is the only thing it can be
+    // - and that falls out of the same expression rather than being a case.
+    const anim = setLoopMode(setLoopStart(withFrames(3), 1), 'pingpong');
+    expect(loopOrder(anim)).toEqual([1, 2]);
+  });
+
+  it('none plays once and stops, whatever the loop point says', () => {
+    const anim = setLoopMode(four(), 'none');
+    expect(loopOrder(anim)).toEqual([]);
+    expect(frameAtTick(anim, 3)).toBe(3);
+    expect(frameAtTick(anim, 4)).toBeNull();
+  });
+
+  it('keeps the loop point across a mode change, so turning looping back on restores it', () => {
+    const off = setLoopMode(four(), 'none');
+    expect(off.loopStart).toBe(1);
+    expect(setLoopMode(off, 'forward').loopStart).toBe(1);
+  });
+
+  it('gives the playhead a tick that runs BACKWARDS under backward', () => {
+    // The frame index alone cannot show this: what the timeline draws is a
+    // tick, and the bug this replaced was a playhead walking off the end while
+    // the frames kept cycling correctly.
+    let anim = setLoopMode(four(), 'backward');
+    anim = setHold(anim, 2, 3);
+    const ticks = [1, 2, 3, 4, 5, 6, 7].map((t) => playbackAt(anim, t)?.tick);
+    // Holds are 1,1,3,1, so the frames start at ticks 0,1,2,5. Backward after
+    // the intro is 3,2,1: frame 3 at tick 5, frame 2 spanning 2..4, frame 1 at 1.
+    expect(ticks).toEqual([5, 2, 3, 4, 1, 5, 2]);
+    for (const t of ticks) expect(t).toBeLessThan(totalTicks(anim));
   });
 });

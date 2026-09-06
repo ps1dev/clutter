@@ -44,7 +44,7 @@
       <div id="gen-buttons">
         <button id="open-cycle">Colour cycle&hellip;</button>
         <button id="open-hsb">HSB ramp&hellip;</button>
-        <button id="open-fade">Fade&hellip;</button>
+        <button id="open-interp">Interpolate&hellip;</button>
       </div>
       <div id="gen-buttons2">
         <button id="run-setall" title="Write the selected entries' colours into every selected frame">Set for all</button>
@@ -93,8 +93,10 @@
     <span class="sep"></span>
     <label>hold <input type="number" id="f-hold" min="1" step="1" value="1"></label>
     <span class="sep"></span>
+    <label title="How playback repeats. The loop point is hidden while this is off, and remembered.">loop
+      <select id="f-loop-mode"></select>
+    </label>
     <button id="f-loop-set">Set loop here</button>
-    <button id="f-loop-clear">No loop</button>
   </div>
 
   <div id="status-bar">
@@ -129,13 +131,21 @@
 <dialog id="dlg-hsb" class="generator-dialog">
   <form method="dialog"><button class="dlg-close" aria-label="Close">&times;</button></form>
   <h3>HSB ramp</h3>
+        <p class="note">Each parameter ramps from its first value to its second across the run. Leave both equal to hold it still.</p>
         <div class="row">
-          <label>hue from <input type="number" id="g-hsb-hue-from" step="1" value="0"></label>
-          <label>hue to <input type="number" id="g-hsb-hue-to" step="1" value="360"></label>
+          <label>hue + <input type="number" id="g-hsb-hue-from" step="1" value="0"></label>
+          <label>to <input type="number" id="g-hsb-hue-to" step="1" value="360"></label>
         </div>
         <div class="row">
           <label>saturation &times; <input type="number" id="g-hsb-sat" min="0" step="0.05" value="1"></label>
-          <label>value &times; <input type="number" id="g-hsb-val" min="0" step="0.05" value="1"></label>
+          <label>to <input type="number" id="g-hsb-sat-to" min="0" step="0.05" value="1"></label>
+        </div>
+        <div class="row">
+          <label>brightness &times; <input type="number" id="g-hsb-val" min="0" step="0.05" value="1"></label>
+          <label>to <input type="number" id="g-hsb-val-to" min="0" step="0.05" value="1"></label>
+        </div>
+        <div class="row">
+          <label>easing <select id="g-hsb-easing"></select></label>
         </div>
         <div class="row">
           <label id="g-hsb-steps-row">steps <input type="number" id="g-hsb-steps" min="1" value="12"></label>
@@ -152,25 +162,24 @@
 
 </dialog>
 
-<dialog id="dlg-fade" class="generator-dialog">
+<dialog id="dlg-interp" class="generator-dialog">
   <form method="dialog"><button class="dlg-close" aria-label="Close">&times;</button></form>
-  <h3>Fade to colour</h3>
+  <h3>Interpolate</h3>
+        <p class="note" id="g-interp-target"></p>
         <div class="row">
-          <label>target <input type="color" id="g-fade-color" value="#000000"></label>
-          <label>alpha <input type="number" id="g-fade-alpha" min="0" max="255" step="1" value="255"></label>
+          <label title="New frames put into every gap between adjacent frames.">frames per gap
+            <input type="number" id="g-interp-count" min="1" max="64" step="1" value="1">
+          </label>
+          <label>easing <select id="g-interp-easing"></select></label>
         </div>
-        <div class="row">
-          <label id="g-fade-steps-row">steps <input type="number" id="g-fade-steps" min="1" value="8"></label>
-          <label><input type="checkbox" id="g-fade-closed"> closed</label>
-        </div>
-        <div class="row ps1-only" id="g-fade-black-row">
-          <label title="RGB5551 reads 0x0000 as fully transparent, so a generated colour that lands on solid black is replaced with this instead.">black becomes
-            <input type="text" id="g-fade-black" value="0x0421" size="8" spellcheck="false">
+        <div class="row ps1-only" id="g-interp-black-row">
+          <label title="RGB5551 reads 0x0000 as fully transparent, so an interpolated colour that lands on solid black is replaced with this instead.">black becomes
+            <input type="text" id="g-interp-black" value="0x0421" size="8" spellcheck="false">
           </label>
         </div>
-        <div class="note" id="g-fade-distinct"></div>
-        <button id="g-fade-run">Generate</button>
-        <div class="note" id="g-fade-stalled"></div>
+        <div class="note" id="g-interp-distinct"></div>
+        <button id="g-interp-run">Insert</button>
+        <div class="note" id="g-interp-stalled"></div>
 
 </dialog>
 

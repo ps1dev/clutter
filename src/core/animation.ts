@@ -34,12 +34,40 @@ export interface GeneratorStamp {
   step: number;
 }
 
+/**
+ * How playback repeats, spicyjpeg's model (2026-09-06). This replaced "there
+ * is a loop point, or there is not": `none` is now one mode among four rather
+ * than a null loop point, so the loop marker is simply hidden when looping is
+ * off instead of being a thing you can delete.
+ *
+ *   none      play once and stop
+ *   forward   ... loopStart -> end -> loopStart ...
+ *   backward  ... end -> loopStart -> end ...
+ *   pingpong  ... loopStart -> end -> loopStart ...  reflected, endpoints
+ *             played once per cycle rather than twice
+ *
+ * Frames BEFORE `loopStart` are an intro: played once, forward, in every mode
+ * that loops at all. That is what makes the loop point mean something in the
+ * two reversing modes as well as in `forward`.
+ */
+export type LoopMode = 'none' | 'forward' | 'backward' | 'pingpong';
+
+export const LOOP_MODES: LoopMode[] = ['none', 'forward', 'backward', 'pingpong'];
+
+export const isLoopMode = (v: unknown): v is LoopMode =>
+  typeof v === 'string' && (LOOP_MODES as string[]).includes(v);
+
 export interface Animation {
   formatId: FormatId;
   paletteSize: number;
   frames: Frame[];
-  /** Index playback returns to at the end, or null to play once and stop. */
-  loopStart: number | null;
+  loopMode: LoopMode;
+  /**
+   * Index the loop returns to. Always a real index - it is carried across
+   * edits even while `loopMode` is `none`, so turning looping back on restores
+   * the point you had rather than silently resetting it to zero.
+   */
+  loopStart: number;
   fps: number;
 }
 
@@ -52,6 +80,7 @@ export function createAnimation(
     formatId,
     paletteSize: palette.length,
     frames: [{ palette: palette.map((e) => ({ ...e })), hold: 1 }],
+    loopMode: 'forward',
     loopStart: 0,
     fps,
   };
@@ -64,9 +93,8 @@ const clampIndex = (i: number, len: number): number => Math.min(len - 1, Math.ma
  * that silently drifts when you delete an earlier frame is the kind of bug that
  * only shows up as "the animation looks slightly wrong now".
  */
-function shiftLoop(loopStart: number | null, at: number, delta: number, newLen: number): number | null {
-  if (loopStart === null) return null;
-  if (newLen === 0) return null;
+function shiftLoop(loopStart: number, at: number, delta: number, newLen: number): number {
+  if (newLen === 0) return 0;
   let next = loopStart;
   if (delta > 0 && loopStart >= at) next = loopStart + delta;
   else if (delta < 0 && loopStart > at) next = loopStart + delta;
@@ -101,15 +129,12 @@ export function moveFrame(anim: Animation, from: number, to: number): Animation 
   const moved = anim.frames[from];
   const next = [...rest.slice(0, dest), moved, ...rest.slice(dest)];
   let loopStart = anim.loopStart;
-  if (loopStart !== null) {
-    if (loopStart === from) loopStart = dest;
-    else {
-      const afterRemove = loopStart > from ? loopStart - 1 : loopStart;
-      loopStart = afterRemove >= dest ? afterRemove + 1 : afterRemove;
-    }
-    loopStart = clampIndex(loopStart, next.length);
+  if (loopStart === from) loopStart = dest;
+  else {
+    const afterRemove = loopStart > from ? loopStart - 1 : loopStart;
+    loopStart = afterRemove >= dest ? afterRemove + 1 : afterRemove;
   }
-  return { ...anim, frames: next, loopStart };
+  return { ...anim, frames: next, loopStart: clampIndex(loopStart, next.length) };
 }
 
 export function setEntry(anim: Animation, frame: number, index: number, entry: Entry): Animation {
@@ -131,9 +156,12 @@ export function setHold(anim: Animation, frame: number, hold: number): Animation
   return { ...anim, frames };
 }
 
-export function setLoopStart(anim: Animation, at: number | null): Animation {
-  if (at === null) return { ...anim, loopStart: null };
+export function setLoopStart(anim: Animation, at: number): Animation {
   return { ...anim, loopStart: clampIndex(at, anim.frames.length) };
+}
+
+export function setLoopMode(anim: Animation, mode: LoopMode): Animation {
+  return { ...anim, loopMode: mode };
 }
 
 /** Total ticks in one pass through every frame. */
@@ -141,30 +169,93 @@ export function totalTicks(anim: Animation): number {
   return anim.frames.reduce((n, f) => n + Math.max(1, f.hold), 0);
 }
 
+const holdOf = (anim: Animation, i: number): number => Math.max(1, anim.frames[i]?.hold ?? 1);
+
+/** Tick the given frame starts on, counting forward from frame 0. */
+export function tickForFrame(anim: Animation, frameIndex: number): number {
+  let t = 0;
+  for (let i = 0; i < frameIndex && i < anim.frames.length; i++) t += holdOf(anim, i);
+  return t;
+}
+
 /**
- * Which frame is showing at tick `t`. Returns null once a non-looping
- * animation has run out, so the caller can stop the clock rather than hold the
- * last frame forever and call it playback.
+ * The repeating frame-index sequence, once the intro has played. Empty when
+ * nothing repeats.
+ *
+ * Ping-pong drops the two endpoints from the return leg, so a 3-frame region
+ * is 0,1,2,1 rather than 0,1,2,2,1,0. Keeping them makes each end frame linger
+ * for twice its hold, which reads as a stutter at the turn - and it falls out
+ * of the same expression at every length: a 2-frame region has no interior, so
+ * ping-pong and forward coincide, which is correct.
  */
-export function frameAtTick(anim: Animation, t: number): number | null {
-  const total = totalTicks(anim);
-  if (total === 0) return null;
-  let tick = Math.max(0, Math.floor(t));
-  if (tick >= total) {
-    if (anim.loopStart === null) return null;
-    const head = anim.frames
-      .slice(0, anim.loopStart)
-      .reduce((n, f) => n + Math.max(1, f.hold), 0);
-    const loopLen = total - head;
-    if (loopLen <= 0) return anim.frames.length - 1;
-    tick = head + ((tick - head) % loopLen);
+export function loopOrder(anim: Animation): number[] {
+  const n = anim.frames.length;
+  if (n === 0 || anim.loopMode === 'none') return [];
+  const start = clampIndex(anim.loopStart, n);
+  const fwd: number[] = [];
+  for (let i = start; i < n; i++) fwd.push(i);
+  if (fwd.length === 0) return [];
+  if (anim.loopMode === 'backward') return fwd.slice().reverse();
+  if (anim.loopMode === 'pingpong') return [...fwd, ...fwd.slice(1, -1).reverse()];
+  return fwd;
+}
+
+/**
+ * Where playback is at tick `t`: which frame, and where the playhead should
+ * sit on the timeline.
+ *
+ * Both are returned together because they were computed separately once, in
+ * `frameAtTick` here and again in the rAF loop in main.ts, and that duplicate
+ * is what left the playhead walking off the right-hand edge after one loop.
+ * The tick is the position on the ORIGINAL timeline, so under `backward` and
+ * `pingpong` the playhead genuinely runs backwards, which is what those modes
+ * look like.
+ *
+ * Returns null once a non-looping animation has run out, so the caller can
+ * stop the clock rather than hold the last frame forever and call it playback.
+ */
+export function playbackAt(anim: Animation, t: number): { frame: number; tick: number } | null {
+  const n = anim.frames.length;
+  if (n === 0) return null;
+  const tick = Math.max(0, Math.floor(t));
+
+  if (anim.loopMode === 'none') {
+    if (tick >= totalTicks(anim)) return null;
+    return { frame: linearFrameAt(anim, tick), tick };
   }
+
+  // The intro is every frame before the loop point, played once, forward, in
+  // all three looping modes.
+  const head = tickForFrame(anim, clampIndex(anim.loopStart, n));
+  if (tick < head) return { frame: linearFrameAt(anim, tick), tick };
+
+  const order = loopOrder(anim);
+  const cycle = order.reduce((sum, i) => sum + holdOf(anim, i), 0);
+  if (order.length === 0 || cycle <= 0) return { frame: n - 1, tick: head };
+
+  let u = (tick - head) % cycle;
+  for (const i of order) {
+    const h = holdOf(anim, i);
+    if (u < h) return { frame: i, tick: tickForFrame(anim, i) + u };
+    u -= h;
+  }
+  const last = order[order.length - 1];
+  return { frame: last, tick: tickForFrame(anim, last) };
+}
+
+/** Frame at a tick counted straight through the list, no looping. */
+function linearFrameAt(anim: Animation, tick: number): number {
   let acc = 0;
   for (let i = 0; i < anim.frames.length; i++) {
-    acc += Math.max(1, anim.frames[i].hold);
+    acc += holdOf(anim, i);
     if (tick < acc) return i;
   }
   return anim.frames.length - 1;
+}
+
+/** Which frame is showing at tick `t`. Thin wrapper over `playbackAt`. */
+export function frameAtTick(anim: Animation, t: number): number | null {
+  return playbackAt(anim, t)?.frame ?? null;
 }
 
 /**

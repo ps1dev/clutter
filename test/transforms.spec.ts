@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   copyFromIndex,
+  interpolateFrames,
   phaseShift,
   resolveIndex,
   resolveSelection,
@@ -129,6 +130,24 @@ describe('phaseShift', () => {
     expect(row(out[5])).toEqual([30, 31, 22, 23]);
   });
 
+  it('mirrors on a negative increment, which is what TRUNCATION buys over flooring', () => {
+    // spicyjpeg, 2026-09-06: "always truncate towards zero (floor if positive
+    // and ceil if negative)". The assertion is that PROPERTY - a run of -0.5
+    // steps at the same moments as +0.5 and in the other direction - rather
+    // than a restatement of trunc(). Flooring passes the worked example above
+    // and fails this: floor(-2 + k*-0.5) is -2,-3,-3,-4 where trunc is
+    // -2,-2,-3,-3, so entry 1 would come from a different frame.
+    const p = build(8, 4);
+    const sel = resolveSelection(8, 4, null, [0, 1, 2, 3]);
+    const pos = phaseShift(p, sel, { shift: 2, increment: 0.5 });
+    const neg = phaseShift(p, sel, { shift: -2, increment: -0.5 });
+    // Frame 5 under a +2/+3 shift reads frames 3 and 2; under -2/-3 it reads
+    // frames 7 and 0 (wrapping), the same distance the other way. Under floor
+    // it would read [70, 1, 2, 13] instead - three of the four entries wrong.
+    expect(row(pos[5])).toEqual([30, 31, 22, 23]);
+    expect(row(neg[5])).toEqual([70, 71, 2, 3]);
+  });
+
   it('shifts backwards on a negative amount', () => {
     const p = build(4, 1);
     const sel = resolveSelection(4, 1, null, null);
@@ -150,5 +169,84 @@ describe('phaseShift', () => {
     const p = build(4, 3);
     const sel = resolveSelection(4, 3, null, null);
     expect(grid(phaseShift(p, sel, { shift: 0, increment: 0 }))).toEqual(grid(p));
+  });
+});
+
+describe('interpolateFrames', () => {
+  /** frames x entries as {palette, hold}, value = frame*10 + entry. */
+  const frames = (n: number, entries: number) =>
+    build(n, entries).map((palette, i) => ({ palette, hold: i + 1 }));
+  const all = (n: number, entries: number) => resolveSelection(n, entries, null, null);
+
+  it('puts count frames in every gap between adjacent selected frames', () => {
+    // Three frames have two gaps, so two per gap is four new frames, not six.
+    const out = interpolateFrames(frames(3, 1), all(3, 1), { count: 2 });
+    expect(out.frames).toHaveLength(7);
+    expect(out.indexMap).toEqual([0, 3, 6]);
+  });
+
+  it('interpolates the selected entries and COPIES the unselected ones from the left', () => {
+    // The discriminator. Entry 1 is not selected, so in the inserted frame it
+    // must be the LEFT frame's 1 - not the right frame's, and not a midpoint.
+    // A midpoint would be 11, the right frame's would be 11 as well at these
+    // numbers, so the fixture spaces the frames out: left 0/1, right 20/21.
+    const src = [
+      { palette: [c(0), c(1)], hold: 1 },
+      { palette: [c(20), c(21)], hold: 1 },
+    ];
+    const sel = resolveSelection(2, 2, null, [0]);
+    const out = interpolateFrames(src, sel, { count: 1 });
+    expect(grid(out.frames.map((f) => f.palette))).toEqual([
+      [0, 1],
+      [10, 1],
+      [20, 21],
+    ]);
+  });
+
+  it('leaves frames outside the selection alone, and inserts nothing beside them', () => {
+    const out = interpolateFrames(frames(4, 1), resolveSelection(4, 1, [1, 2], null), { count: 1 });
+    expect(grid(out.frames.map((f) => f.palette))).toEqual([[0], [10], [15], [20], [30]]);
+    expect(out.indexMap).toEqual([0, 1, 3, 4]);
+  });
+
+  it('takes the hold from the frame on the left', () => {
+    const out = interpolateFrames(frames(2, 1), all(2, 1), { count: 2 });
+    expect(out.frames.map((f) => f.hold)).toEqual([1, 1, 1, 2]);
+  });
+
+  it('is a no-op with nothing to sit between', () => {
+    for (const [n, count] of [
+      [1, 4],
+      [3, 0],
+    ] as const) {
+      const src = frames(n, 1);
+      const out = interpolateFrames(src, all(n, 1), { count });
+      expect(out.frames).toHaveLength(n);
+      expect(out.indexMap).toEqual(src.map((_, i) => i));
+    }
+  });
+
+  it('eases the inserted frames without moving the frames that were already there', () => {
+    const src = frames(2, 1);
+    const lin = interpolateFrames(src, all(2, 1), { count: 3, easing: 'linear' });
+    const quad = interpolateFrames(src, all(2, 1), { count: 3, easing: 'quad-in' });
+    // Endpoints are the originals under any curve...
+    expect([quad.frames[0].palette[0].r, quad.frames[4].palette[0].r]).toEqual([0, 10]);
+    // ...and every interior frame lags the linear one under quad-in.
+    for (let i = 1; i <= 3; i++) {
+      expect(quad.frames[i].palette[0].r).toBeLessThan(lin.frames[i].palette[0].r);
+    }
+  });
+
+  it('carries no generator stamp onto an inserted frame', () => {
+    // The stamp is provenance for a run a generator produced. A tween is not
+    // part of that run, and inheriting the left frame's stamp would claim it is.
+    const src = [
+      { palette: [c(0)], hold: 1, from: { kind: 'cycle', params: {}, step: 0 } },
+      { palette: [c(20)], hold: 1 },
+    ];
+    const out = interpolateFrames(src, all(2, 1), { count: 1 });
+    expect((out.frames[1] as { from?: unknown }).from).toBeUndefined();
+    expect((out.frames[0] as { from?: unknown }).from).toBeDefined();
   });
 });

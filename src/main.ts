@@ -46,17 +46,18 @@ import {
   moveFrame,
   setEntry,
   setHold,
+  setLoopMode,
   setLoopStart,
+  playbackAt,
+  tickForFrame,
+  LOOP_MODES,
+  isLoopMode,
   type Animation,
   type Frame,
+  type LoopMode,
 } from './core/animation.js';
-import {
-  cycleEntries,
-  hsvRamp,
-  hsvRampOver,
-  interpolateOver,
-  interpolateTo,
-} from './core/generators.js';
+import { EASINGS, EASING_IDS, type EasingId } from './shared/easing.js';
+import { cycleEntries, hsvRamp, hsvRampOver } from './core/generators.js';
 import { paletteLut, composeInto, createImageBuffer } from './core/compose.js';
 import {
   clutLayout,
@@ -79,6 +80,7 @@ import {
 import {
   copyFromIndex,
   phaseShift,
+  interpolateFrames,
   resolveSelection,
   setForAllFrames,
   type EdgeMode,
@@ -137,7 +139,7 @@ const fMoveLeft = $<HTMLButtonElement>('f-move-left');
 const fMoveRight = $<HTMLButtonElement>('f-move-right');
 const fHold = $<HTMLInputElement>('f-hold');
 const fLoopSet = $<HTMLButtonElement>('f-loop-set');
-const fLoopClear = $<HTMLButtonElement>('f-loop-clear');
+const fLoopMode = $<HTMLSelectElement>('f-loop-mode');
 
 const gCycleTarget = $('g-cycle-target');
 const gCycleInc = $<HTMLInputElement>('g-cycle-inc');
@@ -149,20 +151,22 @@ const gCycleStalled = $('g-cycle-stalled');
 const gHsbHueFrom = $<HTMLInputElement>('g-hsb-hue-from');
 const gHsbHueTo = $<HTMLInputElement>('g-hsb-hue-to');
 const gHsbSat = $<HTMLInputElement>('g-hsb-sat');
+const gHsbSatTo = $<HTMLInputElement>('g-hsb-sat-to');
 const gHsbVal = $<HTMLInputElement>('g-hsb-val');
+const gHsbValTo = $<HTMLInputElement>('g-hsb-val-to');
+const gHsbEasing = $<HTMLSelectElement>('g-hsb-easing');
 const gHsbSteps = $<HTMLInputElement>('g-hsb-steps');
 const gHsbClosed = $<HTMLInputElement>('g-hsb-closed');
 const gHsbDistinct = $('g-hsb-distinct');
 const gHsbRun = $<HTMLButtonElement>('g-hsb-run');
 const gHsbStalled = $('g-hsb-stalled');
 
-const gFadeColor = $<HTMLInputElement>('g-fade-color');
-const gFadeAlpha = $<HTMLInputElement>('g-fade-alpha');
-const gFadeSteps = $<HTMLInputElement>('g-fade-steps');
-const gFadeClosed = $<HTMLInputElement>('g-fade-closed');
-const gFadeDistinct = $('g-fade-distinct');
-const gFadeRun = $<HTMLButtonElement>('g-fade-run');
-const gFadeStalled = $('g-fade-stalled');
+const gInterpCount = $<HTMLInputElement>('g-interp-count');
+const gInterpEasing = $<HTMLSelectElement>('g-interp-easing');
+const gInterpTarget = $('g-interp-target');
+const gInterpDistinct = $('g-interp-distinct');
+const gInterpRun = $<HTMLButtonElement>('g-interp-run');
+const gInterpStalled = $('g-interp-stalled');
 
 const dlgCopyFrom = $<HTMLDialogElement>('dlg-copyfrom');
 const cfIndex = $<HTMLInputElement>('cf-index');
@@ -183,10 +187,10 @@ const colorsRow = $('colors-row');
 const formatApply = $<HTMLButtonElement>('format-apply');
 const formatDialogNote = $('format-dialog-note');
 const gHsbBlack = $<HTMLInputElement>('g-hsb-black');
-const gFadeBlack = $<HTMLInputElement>('g-fade-black');
+const gInterpBlack = $<HTMLInputElement>('g-interp-black');
 const dlgCycle = $<HTMLDialogElement>('dlg-cycle');
 const dlgHsb = $<HTMLDialogElement>('dlg-hsb');
-const dlgFade = $<HTMLDialogElement>('dlg-fade');
+const dlgInterp = $<HTMLDialogElement>('dlg-interp');
 
 // The generators moved out of the sidebar into modals: with the palette grid,
 // the buttons and the entry editor all in one scrolling column there were two
@@ -195,7 +199,7 @@ const dlgFade = $<HTMLDialogElement>('dlg-fade');
 for (const [btn, dlg] of [
   ['open-cycle', dlgCycle],
   ['open-hsb', dlgHsb],
-  ['open-fade', dlgFade],
+  ['open-interp', dlgInterp],
 ] as const) {
   $<HTMLButtonElement>(btn).addEventListener('click', () => {
     updateGeneratorNotes();
@@ -206,6 +210,35 @@ for (const [btn, dlg] of [
 const statusFrames = $('s-frames');
 const statusHoverFrame = $('s-frame');
 const statusLoop = $('s-loop');
+
+/*
+ * Both easing dropdowns and the loop-mode dropdown are built from the exported
+ * tables rather than written out in the HTML. A curve added to shared/easing.ts
+ * appears in both tools with nothing else touched, and the two lists cannot
+ * drift apart into offering different sets.
+ */
+for (const sel of [gHsbEasing, gInterpEasing]) {
+  for (const id of EASING_IDS) {
+    const o = document.createElement('option');
+    o.value = id;
+    o.textContent = EASINGS[id].label;
+    sel.appendChild(o);
+  }
+  sel.value = 'linear';
+}
+const LOOP_MODE_LABELS: Record<LoopMode, string> = {
+  none: 'none',
+  forward: 'forward',
+  backward: 'backward',
+  pingpong: 'ping-pong',
+};
+for (const m of LOOP_MODES) {
+  const o = document.createElement('option');
+  o.value = m;
+  o.textContent = LOOP_MODE_LABELS[m];
+  fLoopMode.appendChild(o);
+}
+fLoopMode.value = 'forward';
 const statusHover = $('s-hover');
 const statusMsg = $('s-msg');
 
@@ -469,6 +502,7 @@ async function openProject(file: File): Promise<void> {
       formatId: loaded.colorFormat,
       paletteSize: loaded.frames[0].palette.length,
       frames: loaded.frames.map((f) => ({ palette: f.palette, hold: f.hold })),
+      loopMode: loaded.loopMode,
       loopStart: loaded.loopStart,
       fps: loaded.fps,
     };
@@ -514,6 +548,7 @@ function saveProject(): void {
   const doc = serializeProject({
     colorFormat: state.animation.formatId,
     fps: state.animation.fps,
+    loopMode: state.animation.loopMode,
     loopStart: state.animation.loopStart,
     width: state.imageW,
     height: state.imageH,
@@ -551,7 +586,10 @@ function exportSource(): ExportSource | null {
     height: state.imageH,
     indices: state.indices,
     frames: state.animation.frames.map((f) => ({ palette: f.palette, hold: f.hold })),
-    loopStart: state.animation.loopStart,
+    // export.ts predates loop modes and reads null as "does not loop", which
+    // is still exactly right - the mode rides alongside for a template to emit.
+    loopStart: state.animation.loopMode === 'none' ? null : state.animation.loopStart,
+    loopMode: state.animation.loopMode,
     fps: state.animation.fps,
     name: projectName,
   };
@@ -1140,10 +1178,17 @@ function renderFrameStrip(): void {
   const spanNote = frameSpan ? `, ${frameSpan[1] - frameSpan[0] + 1} selected` : '';
   statusHoverFrame.textContent = `frame ${state.currentFrame}${state.dirty ? ' *' : ''}`;
   statusLoop.textContent =
-    (anim.loopStart !== null ? `loops at ${anim.loopStart}` : 'no loop') + spanNote;
+    (anim.loopMode === 'none'
+      ? 'no loop'
+      : `${LOOP_MODE_LABELS[anim.loopMode]} loop at ${anim.loopStart}`) + spanNote;
+  fLoopMode.value = anim.loopMode;
+  // The loop point is not deleted when looping is off, only hidden - so the
+  // marker and the button that moves it go away together and the index the
+  // animation is carrying is not something you can edit while it does nothing.
+  fLoopSet.classList.toggle('hidden', anim.loopMode === 'none');
 
   timeline.current = state.currentFrame;
-  timeline.loopStart = anim.loopStart;
+  timeline.loopStart = anim.loopMode === 'none' ? null : anim.loopStart;
   timeline.selection = frameSpan;
   // The playhead is the ONLY marker for where you are, now that the
   // current-frame border is gone, so it has to sit exactly where you put it.
@@ -1257,9 +1302,11 @@ fLoopSet.addEventListener('click', () => {
   refreshAll();
 });
 
-fLoopClear.addEventListener('click', () => {
+fLoopMode.addEventListener('change', () => {
   if (!state.animation) return;
-  state.animation = setLoopStart(state.animation, null);
+  const mode = fLoopMode.value;
+  if (!isLoopMode(mode)) return;
+  state.animation = setLoopMode(state.animation, mode);
   refreshAll();
 });
 
@@ -1371,37 +1418,70 @@ function spanFrames(): { palette: Entry[] }[] | null {
   return state.animation.frames.slice(frameSpan[0], frameSpan[1] + 1);
 }
 
+/**
+ * All three HSB parameters ramp, spicyjpeg 2026-09-06. Hue was already a
+ * from/to pair; saturation and brightness were single multipliers held
+ * constant across the run, which is the degenerate case where from equals to -
+ * so the core `hsvRamp` needed nothing, only the two extra inputs and the
+ * curve.
+ *
+ * This is also what retired the fade tool: ramping brightness 1 -> 0 is a fade
+ * to black and 1 -> 0 on saturation is a fade to grey, both of which the old
+ * tool did by interpolating toward a colour.
+ */
 function buildHsbRun(base: Entry[]) {
   const indices = selectedOrAll(base);
-  const hueFrom = Number(gHsbHueFrom.value);
-  const hueTo = Number(gHsbHueTo.value);
-  const sat = Number(gHsbSat.value);
-  const val = Number(gHsbVal.value);
+  const from = {
+    hue: Number(gHsbHueFrom.value),
+    sat: Number(gHsbSat.value),
+    val: Number(gHsbVal.value),
+  };
+  const to = {
+    hue: Number(gHsbHueTo.value),
+    sat: Number(gHsbSatTo.value),
+    val: Number(gHsbValTo.value),
+  };
   const steps = Math.max(1, Math.round(Number(gHsbSteps.value)));
   const closed = gHsbClosed.checked;
+  const easing = gHsbEasing.value as EasingId;
   const over = spanFrames();
-  const params = { indices, hueFrom, hueTo, sat, val, steps: over ? over.length : steps, closed };
-  const from = { hue: hueFrom, sat, val };
-  const to = { hue: hueTo, sat, val };
+  const params = { indices, from, to, steps: over ? over.length : steps, closed, easing };
   const fmt = formatById(state.formatId);
   const frames = over
-    ? hsvRampOver({ frames: over, indices, from, to, closed })
-    : hsvRamp({ base, indices, from, to, steps, closed });
+    ? hsvRampOver({ frames: over, indices, from, to, closed, easing })
+    : hsvRamp({ base, indices, from, to, steps, closed, easing });
   return { params, frames: replaceSolidBlack(fmt, frames, gHsbBlack) };
 }
 
-function buildFadeRun(base: Entry[]) {
-  const indices = selectedOrAll(base);
-  const to = fadeTargetEntry();
-  const steps = Math.max(1, Math.round(Number(gFadeSteps.value)));
-  const closed = gFadeClosed.checked;
-  const over = spanFrames();
-  const params = { indices, to, steps: over ? over.length : steps, closed };
-  const fmt = formatById(state.formatId);
-  const frames = over
-    ? interpolateOver({ frames: over, indices, to, closed })
-    : interpolateTo({ base, indices, to, steps, closed });
-  return { params, frames: replaceSolidBlack(fmt, frames, gFadeBlack) };
+/**
+ * The interpolate tool, which replaced "fade to colour".
+ *
+ * Unlike every other generator this one does not produce a RUN of palettes to
+ * insert at one point - it rebuilds the whole frame list with tweens dropped
+ * into each gap. So it returns the new list plus the index map, and the caller
+ * carries the loop point and the cursor across with it rather than counting
+ * insertions itself.
+ */
+function buildInterpRun() {
+  const anim = state.animation!;
+  const sel = currentSelection();
+  const count = Math.max(1, Math.round(Number(gInterpCount.value)));
+  const easing = gInterpEasing.value as EasingId;
+  const res = interpolateFrames(anim.frames, sel, { count, easing });
+
+  // Only the frames this just invented go through the black substitution.
+  // Running it over the whole list would rewrite existing frames the user
+  // never asked to touch.
+  const kept = new Set(res.indexMap);
+  const fresh: number[] = [];
+  for (let i = 0; i < res.frames.length; i++) if (!kept.has(i)) fresh.push(i);
+  const fmt = formatById(anim.formatId);
+  const fixed = replaceSolidBlack(fmt, fresh.map((i) => res.frames[i].palette), gInterpBlack);
+  fresh.forEach((i, k) => {
+    res.frames[i] = { ...res.frames[i], palette: fixed[k] };
+  });
+
+  return { result: res, inserted: fresh.length, gaps: Math.max(0, sel.frames.length - 1), newPalettes: fixed, count, easing };
 }
 
 /** How many of these palettes are distinct once packed into the target format. */
@@ -1424,7 +1504,7 @@ function updateGeneratorNotes(): void {
   if (!state.animation) {
     gCycleDistinct.textContent = '';
     gHsbDistinct.textContent = '';
-    gFadeDistinct.textContent = '';
+    gInterpDistinct.textContent = '';
     return;
   }
   const fmt = formatById(state.animation.formatId);
@@ -1468,13 +1548,26 @@ function updateGeneratorNotes(): void {
     gCycleSteps.value = String(Math.max(1, nSel - 1));
   }
 
-  for (const id of ['hsb', 'fade']) {
+  for (const id of ['hsb', 'interp']) {
     $(`g-${id}-black-row`).classList.toggle('hidden', !fmt.hasStp);
   }
-  for (const id of ['hsb', 'fade']) {
-    $(`g-${id}-steps-row`).classList.toggle('disabled', span !== null);
-    $<HTMLInputElement>(`g-${id}-steps`).disabled = span !== null;
-  }
+  $('g-hsb-steps-row').classList.toggle('disabled', span !== null);
+  $<HTMLInputElement>('g-hsb-steps').disabled = span !== null;
+
+  // Interpolate needs two frames to sit between. With no timeline span that is
+  // the whole animation, so the only way to reach the dead case is a one-frame
+  // animation or a single-frame selection - and both deserve a sentence rather
+  // than a button that does nothing.
+  const isel = state.animation ? currentSelection() : null;
+  const gaps = isel ? Math.max(0, isel.frames.length - 1) : 0;
+  const interpWhy =
+    gaps === 0
+      ? 'Needs at least two frames to interpolate between. Select a wider span, or add a frame.'
+      : '';
+  $<HTMLButtonElement>('open-interp').disabled = gaps === 0;
+  $<HTMLButtonElement>('open-interp').title = interpWhy;
+  gInterpRun.disabled = gaps === 0;
+  gInterpRun.title = interpWhy;
 
   if (cycleOff) {
     gCycleDistinct.textContent = '';
@@ -1491,34 +1584,40 @@ function updateGeneratorNotes(): void {
   cycleHighlight = ci.length ? [ci[0], ci[ci.length - 1]] : null;
 
   const indices = selectedOrAll(base);
-  if (indices.length > 0) {
-    gHsbDistinct.textContent = runNote(fmt, buildHsbRun(base).frames);
-    gFadeDistinct.textContent = runNote(fmt, buildFadeRun(base).frames);
+  gHsbDistinct.textContent = indices.length > 0 ? runNote(fmt, buildHsbRun(base).frames) : '';
+
+  if (gaps === 0 || !isel) {
+    gInterpTarget.textContent = interpWhy;
+    gInterpDistinct.textContent = '';
   } else {
-    gHsbDistinct.textContent = '';
-    gFadeDistinct.textContent = '';
+    const run = buildInterpRun();
+    const nEnt = isel.entries.length;
+    const size = state.animation.paletteSize;
+    // "the rest are copied from the left" is FALSE when there is no rest, and
+    // a note that describes a case the run is not in is the exact shape that
+    // shipped "up to 1 distinct steps" on the HSB card. Say it only when some
+    // entries really are being held.
+    gInterpTarget.textContent =
+      `${gaps} gap${gaps === 1 ? '' : 's'} between ${isel.frames.length} frames, ` +
+      (nEnt === size
+        ? `all ${size} entries interpolated.`
+        : `${nEnt} of ${size} entries interpolated; the other ${size - nEnt} are copied from the frame on the left.`);
+    const distinct = distinctPalettes(fmt, run.newPalettes);
+    const n = run.newPalettes.length;
+    gInterpDistinct.textContent =
+      `${n} inserted frame${n === 1 ? '' : 's'}, ` +
+      (distinct === n ? `all distinct in ${fmt.label}` : `only ${distinct} distinct in ${fmt.label}`) +
+      `; timeline goes ${state.animation.frames.length} -> ${run.result.frames.length} frames`;
   }
 
   renderPaletteGrid();
 }
 
-function clampToPalette(v: number, len: number): number {
-  return Math.min(len - 1, Math.max(0, Math.round(v)));
-}
-
-function fadeTargetEntry(): Entry {
-  const hex = gFadeColor.value;
-  const v = parseInt(hex.slice(1), 16) || 0;
-  return {
-    r: (v >> 16) & 0xff,
-    g: (v >> 8) & 0xff,
-    b: v & 0xff,
-    a: clampToPalette(Number(gFadeAlpha.value), 256),
-  };
-}
-
-[gHsbHueFrom, gHsbHueTo, gHsbSat, gHsbVal, gFadeColor, gFadeAlpha].forEach((el) => {
+[gHsbHueFrom, gHsbHueTo, gHsbSat, gHsbSatTo, gHsbVal, gHsbValTo, gInterpCount].forEach((el) => {
   el.addEventListener('input', updateGeneratorNotes);
+});
+[gHsbEasing, gInterpEasing].forEach((el) => {
+  el.addEventListener('change', updateGeneratorNotes);
 });
 
 gCycleRun.addEventListener('click', () => {
@@ -1543,14 +1642,30 @@ gHsbRun.addEventListener('click', () => {
   refreshAll();
 });
 
-gFadeRun.addEventListener('click', () => {
+gInterpRun.addEventListener('click', () => {
   if (!state.animation) return;
-  const base = state.animation.frames[state.currentFrame].palette;
-  const { params, frames: generated } = buildFadeRun(base);
-  insertGenerated(generated, 'fade', params);
-  const fmt = formatById(state.animation.formatId);
-  const stalled = countStalledFrames(fmt, generated);
-  gFadeStalled.textContent = `${stalled} stalled frame${stalled === 1 ? '' : 's'} in this run`;
+  const anim = state.animation;
+  const { result, inserted, newPalettes } = buildInterpRun();
+  if (inserted === 0) return;
+  const map = result.indexMap;
+  state.animation = {
+    ...anim,
+    frames: result.frames,
+    // Carried through the map rather than recomputed: the loop point and the
+    // cursor are indices into a list that just got longer.
+    loopStart: map[anim.loopStart] ?? anim.loopStart,
+  };
+  state.currentFrame = map[state.currentFrame] ?? state.currentFrame;
+  state.playheadTick = tickForFrame(state.animation, state.currentFrame);
+  // The span still means "the frames I was working on", which now includes
+  // everything that was inserted between them.
+  if (frameSpan) frameSpan = [map[frameSpan[0]], map[frameSpan[1]]];
+  const fmt = formatById(anim.formatId);
+  const stalled = countStalledFrames(fmt, newPalettes);
+  gInterpStalled.textContent =
+    `${inserted} frame${inserted === 1 ? '' : 's'} inserted, ` +
+    `${stalled} of them identical to the one before in ${fmt.label}`;
+  setStatus(`Interpolated: ${inserted} new frame${inserted === 1 ? '' : 's'}.`);
   refreshAll();
 });
 
@@ -1802,12 +1917,6 @@ function frameAtPlayhead(): number | null {
   return state.animation.frames.length - 1;
 }
 
-function tickForFrame(anim: Animation, frameIndex: number): number {
-  let t = 0;
-  for (let i = 0; i < frameIndex && i < anim.frames.length; i++) t += Math.max(1, anim.frames[i].hold);
-  return t;
-}
-
 function stopPlayback(): void {
   state.playing = false;
   if (rafId !== null) cancelAnimationFrame(rafId);
@@ -1829,39 +1938,24 @@ function startPlayback(): void {
 function tickLoop(now: number): void {
   if (!state.playing || !state.animation) return;
   const elapsedTicks = ((now - playAnchorTime) / 1000) * state.animation.fps;
-  const t = playAnchorTick + elapsedTicks;
 
-  let acc = 0;
-  let frameIdx: number | null = null;
-  const total = state.animation.frames.reduce((n, f) => n + Math.max(1, f.hold), 0);
-  let tick = Math.max(0, Math.floor(t));
-  if (tick >= total) {
-    if (state.animation.loopStart === null) {
-      stopPlayback();
-      return;
-    }
-    const head = tickForFrame(state.animation, state.animation.loopStart);
-    const loopLen = total - head;
-    tick = loopLen <= 0 ? head : head + ((tick - head) % loopLen);
+  // Both the frame and the playhead position come out of animation.ts. They
+  // were computed here as well once, and that copy is what let the playhead
+  // walk off the right-hand edge after one loop while the frame kept cycling
+  // correctly. Under `backward` and `pingpong` the playhead runs backwards,
+  // which is the whole point of being given a tick rather than a frame.
+  const at = playbackAt(state.animation, playAnchorTick + elapsedTicks);
+  if (at === null) {
+    stopPlayback();
+    return;
   }
-  for (let i = 0; i < state.animation.frames.length; i++) {
-    acc += Math.max(1, state.animation.frames[i].hold);
-    if (tick < acc) {
-      frameIdx = i;
-      break;
-    }
-  }
-  if (frameIdx === null) frameIdx = state.animation.frames.length - 1;
 
-  if (frameIdx !== state.currentFrame) {
-    state.currentFrame = frameIdx;
+  if (at.frame !== state.currentFrame) {
+    state.currentFrame = at.frame;
     composeAndDraw();
     timeline.current = state.currentFrame;
-    // Wrapped, not raw: `t` keeps growing past the end of the animation, so
-    // after the first loop the playhead walked off the right-hand side and
-    // stopped appearing to move.
-    state.playheadTick = tick;
-    timeline.playheadTick = tick;
+    state.playheadTick = at.tick;
+    timeline.playheadTick = at.tick;
     statusHoverFrame.textContent = `frame ${state.currentFrame}`;
     timeline.requestDraw();
     updatePaletteColors();

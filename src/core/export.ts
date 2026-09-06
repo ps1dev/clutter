@@ -36,7 +36,10 @@ export interface ExportSource {
   height: number;
   indices: Uint8Array; // one byte per pixel
   frames: { palette: Entry[]; hold: number }[];
+  /** null when playback does not loop. */
   loopStart: number | null;
+  /** 'none' | 'forward' | 'backward' | 'pingpong', for a template to emit. */
+  loopMode?: string;
   fps: number;
   name: string; // project name, no extension
 }
@@ -489,6 +492,7 @@ function topScope(src: ExportSource, paletteSize: number): Scope {
     // -1 when not looping: Scalar has no null, and this is the number a
     // template author would otherwise have to invent themselves.
     loopStart: src.loopStart ?? -1,
+    loopMode: src.loopMode ?? (src.loopStart === null ? 'none' : 'forward'),
     colorFormat: src.fmt.label,
     colorFormatId: src.fmt.id,
   };

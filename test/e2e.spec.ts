@@ -329,7 +329,7 @@ describe('project save and load', () => {
     // No format dialog on the project path - the file already says.
     expect(await p6.locator('#dlg-format[open]').count()).toBe(0);
     expect(await p6.textContent('#s-frames')).toBe('3 frames');
-    expect(await p6.textContent('#s-loop')).toMatch(/loops at/);
+    expect(await p6.textContent('#s-loop')).toMatch(/forward loop at/);
     expect(await p6.inputValue('#fps-input')).toBe('24');
     // A freshly opened project is not dirty.
     expect(await p6.textContent('#s-frame')).not.toMatch(/\*/);
@@ -548,7 +548,7 @@ describe('looping playback', () => {
     await p2.keyboard.press('Home');
     await p2.click('#f-loop-set');
     expect(await p2.textContent('#s-frames')).toBe('4 frames');
-    expect(await p2.textContent('#s-loop')).toMatch(/loops at 0/);
+    expect(await p2.textContent('#s-loop')).toMatch(/forward loop at 0/);
 
     await p2.click('#btn-play');
     // 37ms against a 50ms frame period, deliberately not a near-multiple: at
@@ -602,4 +602,94 @@ describe('device pixel ratio', () => {
     // first time, so both arms run and must agree.
     expect(two).toBe(one);
   }, 120_000);
+});
+
+describe('loop modes', () => {
+  it('switches mode, and hides the loop point rather than deleting it', async () => {
+    const p = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+    await p.goto(`file://${DIST}`);
+    await p.waitForSelector('#canvas');
+    await p.setInputFiles('#file-png', resolve(ROOT, 'test/fixtures/indexed8-trns.png'));
+    await p.waitForSelector('#dlg-format[open]');
+    await p.click('#format-apply');
+    await p.waitForFunction(() => (document.querySelector('#s-msg')?.textContent ?? '').length > 0);
+    for (let i = 0; i < 3; i++) await p.click('#f-duplicate');
+
+    // Put the loop point somewhere that is not the default, so "kept" is
+    // distinguishable from "reset to 0".
+    await p.click('#canvas');
+    await p.keyboard.press('End');
+    await p.click('#f-loop-set');
+    expect(await p.textContent('#s-loop')).toMatch(/forward loop at 3/);
+
+    for (const [mode, text] of [
+      ['backward', /backward loop at 3/],
+      ['pingpong', /ping-pong loop at 3/],
+    ] as const) {
+      await p.selectOption('#f-loop-mode', mode);
+      expect(await p.textContent('#s-loop')).toMatch(text);
+    }
+
+    await p.selectOption('#f-loop-mode', 'none');
+    expect(await p.textContent('#s-loop')).toMatch(/no loop/);
+    // Hidden, not deleted: the point comes back when looping does.
+    expect(await p.locator('#f-loop-set').isVisible()).toBe(false);
+    await p.selectOption('#f-loop-mode', 'forward');
+    expect(await p.textContent('#s-loop')).toMatch(/forward loop at 3/);
+    expect(await p.locator('#f-loop-set').isVisible()).toBe(true);
+    await p.close();
+  });
+});
+
+describe('the interpolate tool', () => {
+  it('replaced the fade tool, which is GONE rather than merely unreachable', async () => {
+    // An absence assertion, because "we removed the tool" and "the button
+    // silently stopped working" are indistinguishable in a suite that only
+    // ever checks what IS there.
+    const p = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+    await p.goto(`file://${DIST}`);
+    await p.waitForSelector('#canvas');
+    for (const gone of ['#open-fade', '#dlg-fade', '#g-fade-run', '#g-fade-color']) {
+      expect([gone, await p.locator(gone).count()]).toEqual([gone, 0]);
+    }
+    expect(await p.locator('#open-interp').count()).toBe(1);
+    // ...and the HSB ramp grew the two inputs that make it cover what fading
+    // to black and to grey used to do.
+    for (const added of ['#g-hsb-sat-to', '#g-hsb-val-to', '#g-hsb-easing', '#g-interp-easing']) {
+      expect([added, await p.locator(added).count()]).toEqual([added, 1]);
+    }
+    // Thirteen curves, both dropdowns, from one table.
+    expect(await p.locator('#g-hsb-easing option').count()).toBe(13);
+    expect(await p.locator('#g-interp-easing option').count()).toBe(13);
+    await p.close();
+  });
+
+  it('inserts tween frames into every gap', async () => {
+    const p = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+    await p.goto(`file://${DIST}`);
+    await p.waitForSelector('#canvas');
+    await p.setInputFiles('#file-png', resolve(ROOT, 'test/fixtures/indexed8-trns.png'));
+    await p.waitForSelector('#dlg-format[open]');
+    await p.click('#format-apply');
+    await p.waitForFunction(() => (document.querySelector('#s-msg')?.textContent ?? '').length > 0);
+    // Three frames, so two gaps.
+    await p.click('#f-duplicate');
+    await p.click('#f-duplicate');
+    expect(await p.textContent('#s-frames')).toBe('3 frames');
+
+    await p.click('#open-interp');
+    await p.waitForSelector('#dlg-interp[open]');
+    await p.fill('#g-interp-count', '2');
+    // The note is a DRY RUN of the real call, so it has to agree with what the
+    // button then does - that is the whole reason it is not a model.
+    expect(await p.textContent('#g-interp-distinct')).toMatch(/4 inserted frames.*3 -> 7 frames/);
+    // No "the rest are copied" clause when there is no rest - a note that
+    // describes a case the run is not in is how the old HSB card shipped
+    // "up to 1 distinct steps".
+    expect(await p.textContent('#g-interp-target')).toMatch(/2 gaps between 3 frames, all \d+ entries interpolated\./);
+    await p.click('#g-interp-run');
+    expect(await p.textContent('#s-frames')).toBe('7 frames');
+    expect(await p.textContent('#g-interp-stalled')).toMatch(/4 frames inserted/);
+    await p.close();
+  });
 });
