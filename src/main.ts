@@ -86,13 +86,9 @@ import {
   type EdgeMode,
 } from './core/transforms.js';
 import {
-  drawFrameStrip,
   drawPaletteGrid,
-  frameHitTest,
-  frameStripLayout,
   paletteHitTest,
   paletteLayout,
-  type FrameStripLayout,
   type PaletteGridLayout,
 } from './ui/grids.js';
 import { TimelineView } from './ui/timeline.js';
@@ -315,7 +311,6 @@ const timeline = new TimelineView(stripCanvas);
 /** Frame span selected on the timeline, inclusive, or null. */
 let frameSpan: [number, number] | null = null;
 let paletteGridLayout: PaletteGridLayout = paletteLayout(0, 260);
-let stripLayout: FrameStripLayout = frameStripLayout(0);
 
 /**
  * Size a canvas's backing store in device pixels and its box in CSS pixels,
@@ -993,13 +988,6 @@ paletteCanvas.addEventListener('click', (ev) => {
   const count = state.animation.frames[state.currentFrame].palette.length;
   const i = paletteHitTest(paletteGridLayout, count, ev.clientX - r.left, ev.clientY - r.top);
   if (i !== null) onSwatchClick(i, ev);
-});
-
-stripCanvas.addEventListener('click', (ev) => {
-  if (!state.animation) return;
-  const r = stripCanvas.getBoundingClientRect();
-  const i = frameHitTest(stripLayout, state.animation.frames.length, ev.clientX - r.left);
-  if (i !== null) selectFrame(i);
 });
 
 /**

@@ -693,3 +693,57 @@ describe('the interpolate tool', () => {
     await p.close();
   });
 });
+
+describe('scrubbing', () => {
+  it('stays where the cursor left it when the button is released', async () => {
+    // Reported 2026-09-06: with holds > 1 the playhead followed the cursor
+    // while the button was down and "jumps to an unrelated frame (either to
+    // the left or to the right of the cursor, seemingly randomly)" on release.
+    //
+    // A `click` listener left on the strip canvas from before TimelineView
+    // existed was hit-testing a `frameStripLayout(0)` that was never
+    // reassigned: a fixed 52px-per-frame grid, floor((x - 8) / 52), which has
+    // nothing to do with the spans the timeline draws. Past frame*52+8 it
+    // returned null and did nothing, which is where "seemingly randomly" came
+    // from. Own page: this reads the frame index, and the shared one carries
+    // whatever the earlier tests left behind.
+    const p = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+    await p.goto(`file://${DIST}`);
+    await p.waitForSelector('#canvas');
+    await p.setInputFiles('#file-png', resolve(ROOT, 'test/fixtures/indexed8-trns.png'));
+    await p.waitForSelector('#dlg-format[open]');
+    await p.click('#format-apply');
+    await p.waitForFunction(() => (document.querySelector('#s-msg')?.textContent ?? '').length > 0);
+    for (let i = 0; i < 5; i++) await p.click('#f-duplicate');
+    // hold 5 everywhere, which is what makes the timeline's spans disagree
+    // with a fixed-width grid. At hold 1 the two happen to coincide often
+    // enough that this bug was invisible for two days.
+    for (let i = 0; i < 6; i++) {
+      await p.click('#canvas');
+      await p.keyboard.press('Home');
+      for (let k = 0; k < i; k++) await p.keyboard.press('ArrowRight');
+      await p.fill('#f-hold', '5');
+      await p.dispatchEvent('#f-hold', 'change');
+    }
+    const frameNow = async () =>
+      ((await p.textContent('#s-frame')) ?? '').replace('frame ', '').replace(' *', '');
+
+    const box = (await p.locator('#strip-canvas').boundingBox())!;
+    const y = box.y + box.height * 0.7;
+    const seen: string[] = [];
+    for (const frac of [0.15, 0.3, 0.45, 0.62, 0.8]) {
+      await p.mouse.move(box.x + 5, y);
+      await p.mouse.down();
+      await p.mouse.move(box.x + box.width * frac, y, { steps: 8 });
+      const during = await frameNow();
+      await p.mouse.up();
+      await p.waitForTimeout(50);
+      expect([frac, await frameNow()]).toEqual([frac, during]);
+      seen.push(during);
+    }
+    // ...and the drag really did move, so the assertion above is not five
+    // copies of "frame 0 equals frame 0".
+    expect(new Set(seen).size).toBeGreaterThan(2);
+    await p.close();
+  });
+});

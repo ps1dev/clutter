@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  frameHitTest,
-  frameStripLayout,
   paletteHitTest,
   paletteLayout,
 } from '../src/ui/grids.js';
@@ -51,24 +49,15 @@ describe('palette grid geometry', () => {
   });
 });
 
-describe('frame strip geometry', () => {
-  it('grows with the frame count and leaves the padding out of cell 0', () => {
-    const a = frameStripLayout(1);
-    const b = frameStripLayout(9);
-    expect(b.width).toBeGreaterThan(a.width);
-    expect(frameHitTest(b, 9, a.pad + 1)).toBe(0);
-  });
-
-  it('maps each cell centre to its own frame', () => {
-    const l = frameStripLayout(9);
-    for (let i = 0; i < 9; i++) {
-      expect(frameHitTest(l, 9, l.pad + i * (l.cell + l.gap) + l.cell / 2)).toBe(i);
-    }
-  });
-
-  it('returns null before the first cell and past the last', () => {
-    const l = frameStripLayout(4);
-    expect(frameHitTest(l, 4, 0)).toBeNull();
-    expect(frameHitTest(l, 4, l.pad + 4 * (l.cell + l.gap) + 1)).toBeNull();
-  });
-});
+/*
+ * The `frameStripLayout` / `frameHitTest` tests that stood here were deleted
+ * 2026-09-06 WITH the functions they covered, not because they were wrong.
+ *
+ * That equal-cell strip was superseded by TimelineView on 09-04, and the
+ * renderer went unused the same day - but a `click` listener on the same canvas
+ * kept calling `frameHitTest` against a `frameStripLayout(0)` that was never
+ * reassigned, so releasing a scrub selected the frame at floor((x-8)/52) on a
+ * fixed 52px grid the timeline had not used for two days. These tests passed
+ * throughout, because the function was correct and its CALLER was the defect.
+ * The regression assertion is in e2e.spec.ts, "scrubbing", where the wiring is.
+ */
