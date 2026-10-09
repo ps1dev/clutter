@@ -49,6 +49,11 @@ body {
   flex: 1;
 }
 
+#btn-manual {
+  color: var(--accent);
+  padding: 0 6px;
+}
+
 button,
 select,
 input[type='number'],

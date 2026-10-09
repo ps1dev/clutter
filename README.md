@@ -4,6 +4,9 @@ A browser-based palette animation editor for indexed-colour images. Load an
 indexed PNG, build a sequence of palettes, and watch the image animate without a
 single pixel changing.
 
+Running at <https://tools.psx.dev/clutter/>. The [manual](https://tools.psx.dev/clutter/manual/)
+walks through every panel and generator with annotated screenshots.
+
 Builds to a single self-contained `dist/index.html`. No server, no install, no
 network.
 
