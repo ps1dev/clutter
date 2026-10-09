@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>clutter manual</title>
+<style>
+  :root { --bg: #0f1215; --panel: #161a1f; --line: #2a3038; --text: #d6dbe1; --dim: #8a929c; --accent: #ffcc33; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 system-ui, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 20px 80px; }
+  h1 { margin: 0 0 4px; font-size: 26px; }
+  h2 { margin: 44px 0 8px; font-size: 20px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+  a { color: var(--accent); }
+  code, kbd { font: 13px ui-monospace, monospace; background: var(--panel); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
+  img { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: 4px; margin: 12px 0; }
+  nav ol { columns: 2; padding-left: 20px; }
+  li { margin: 3px 0; }
+  .dim { color: var(--dim); }
+</style>
+</head>
+<body>
+<main>
+<h1>clutter manual</h1>
+<p class="dim">A palette animation editor for indexed images. <a href="../">Open clutter</a>.
+The numbered labels in each screenshot match the numbered notes under it.</p>
+
+<p>An animation here is a list of complete palettes played over one fixed image. The pixels never change; each frame swaps the palette. On a PlayStation that means uploading a new CLUT per frame and nothing else.</p>
+
+<nav><ol>
+  <li><a href="#import">Importing an image</a></li>
+  <li><a href="#layout">The window</a></li>
+  <li><a href="#entry">Selecting and editing entries</a></li>
+  <li><a href="#cycle">Colour cycle</a></li>
+  <li><a href="#frames">Frames and playback</a></li>
+  <li><a href="#hsb">HSB ramp</a></li>
+  <li><a href="#interp">Interpolate</a></li>
+  <li><a href="#phase">Phase shift</a></li>
+  <li><a href="#format">Colour format</a></li>
+  <li><a href="#export">Export</a></li>
+</ol></nav>
+
+<h2 id="import">1. Importing an image</h2>
+<p>Everything runs in the page; nothing is uploaded anywhere.</p>
+<img src="01-import.png" alt="the format dialog shown on import">
+<ol>
+  <li><b>Open&hellip;</b> takes a PNG, or a <code>.clutter.json</code> project saved earlier. Dropping either on the canvas does the same.</li>
+  <li>Before the image loads you choose the colour format: RGBA8888, RGB565, or RGB5551 for the PlayStation. The screenshots in this manual use RGB5551.</li>
+  <li>An indexed PNG keeps its own palette and indices. A truecolour PNG is quantized, and this dialog then also asks how many colours (2 to 256).</li>
+  <li><b>Import</b> loads it as an animation of one frame.</li>
+</ol>
+
+<h2 id="layout">2. The window</h2>
+<img src="02-overview.png" alt="clutter with an image loaded">
+<ol>
+  <li>The image, drawn with the palette of the current frame. The mouse wheel zooms.</li>
+  <li>The palette of the current frame, one square per entry.</li>
+  <li>The generators, which create frames, and the edits that work across frames.</li>
+  <li>The timeline: one cell per frame, each a complete palette.</li>
+  <li>Frame editing and loop settings.</li>
+  <li><b>Play</b> and its speed.</li>
+  <li>Zoom: <b>Fit</b> fills the canvas, <b>1:1</b> shows one screen pixel per image pixel.</li>
+  <li>Status: frame count, current frame, loop setting, and the result of the last action.</li>
+  <li>The link to this manual.</li>
+</ol>
+
+<h2 id="entry">3. Selecting and editing entries</h2>
+<img src="03-entry.png" alt="palette entry 17 selected in the editor">
+<ol>
+  <li>Click an entry to select it and open it in the editor. <kbd>Shift</kbd>+click selects every entry between it and the last one clicked; <kbd>Ctrl</kbd> or <kbd>Cmd</kbd>+click adds or removes one. Most tools work on the selection.</li>
+  <li>The entry's channels, in the units the format stores: 0-31 for RGB5551, so what you set is exactly what the hardware gets.</li>
+  <li>The PlayStation semi-transparency bit. It only matters when the primitive is drawn semi-transparent; otherwise the colour draws solid.</li>
+  <li>The packed value as stored. You can type a value here.</li>
+  <li><b>Set for all</b> writes the selected entries' colours into every frame, or into every frame of a selected span. Use it for a colour that should not animate.</li>
+  <li><b>Copy from&hellip;</b> gives the selected entries the colour of another entry, frame by frame, so if that entry animates the copies animate with it.</li>
+</ol>
+<p class="dim">RGB5551 cannot hold an opaque black: <code>0x0000</code> is always transparent. The editor shows a warning under the value when an entry is set to it.</p>
+
+<h2 id="cycle">4. Colour cycle</h2>
+<p>Rotates the colours of the selected entries one step per frame, the Deluxe Paint way. Here entries 1-16 are the bands of the waterfall, so cycling them makes it flow.</p>
+<img src="04-cycle.png" alt="the colour cycle dialog">
+<ol>
+  <li>The entries being cycled. They are cycled in index order; a selection with gaps is cycled as if it had none.</li>
+  <li>How far the colours move each frame. 1 is one entry per frame, 0.5 is one every two frames, a negative value runs backwards.</li>
+  <li><b>wrap</b>: a colour pushed off one end comes back at the other. Off, it drops out and the emptied entries repeat their neighbour.</li>
+  <li>How many frames to add. The default is one full turn of the selection.</li>
+  <li>How many of those frames the format can tell apart. If two would come out identical, it says so here before you generate.</li>
+  <li><b>Generate</b> adds the frames after the current one.</li>
+</ol>
+
+<h2 id="frames">5. Frames and playback</h2>
+<img src="05-frames.png" alt="the timeline after a colour cycle">
+<ol>
+  <li>The timeline. Drag to scrub. <kbd>Shift</kbd>+drag selects a span of frames, or moves the loop marker if you start on it; <kbd>Esc</kbd> clears the span. The wheel zooms the timeline and the middle button pans it.</li>
+  <li>Insert, delete, duplicate, and move the current frame left or right.</li>
+  <li><b>hold</b>: how many playback ticks the current frame stays on screen.</li>
+  <li>Loop mode: none, forward, backward, or ping-pong.</li>
+  <li><b>Set loop here</b>: after the first pass, playback loops from this frame to the end.</li>
+  <li><b>Play</b>, or <kbd>Space</kbd>, at this many ticks per second. The arrow keys step one frame, <kbd>Home</kbd> and <kbd>End</kbd> jump to the ends.</li>
+  <li>Frame count, current frame and loop setting.</li>
+</ol>
+
+<h2 id="hsb">6. HSB ramp</h2>
+<p>Generates frames that shift the selected entries' hue, saturation and brightness. If a span of frames is selected, the ramp is applied across that span instead, and the step count comes from the span.</p>
+<img src="06-hsb.png" alt="the HSB ramp dialog">
+<ol>
+  <li>Hue offset in degrees, from the first value to the second over the run. Equal values hold it still.</li>
+  <li>Saturation multiplier, from - to.</li>
+  <li>Brightness multiplier, from - to.</li>
+  <li>The easing curve the ramp follows.</li>
+  <li>How many frames to generate.</li>
+  <li><b>closed</b>: the last step comes back round to the start, so the ramp loops without a jump.</li>
+  <li>RGB5551 only: the colour used when a result comes out as <code>0x0000</code>, which would draw as transparent.</li>
+  <li>How many of the frames the format can tell apart. In this example only 11 of 12 differ at 5 bits per channel.</li>
+</ol>
+
+<h2 id="interp">7. Interpolate</h2>
+<p>Adds frames between the existing ones, blending each pair. Only the selected entries are blended; the others are copied from the frame on the left.</p>
+<img src="07-interpolate.png" alt="the interpolate dialog">
+<ol>
+  <li>What will be blended: how many gaps, and how many entries change.</li>
+  <li>New frames per gap, 1 to 64.</li>
+  <li>The easing curve.</li>
+  <li>RGB5551 only: the replacement for a result of <code>0x0000</code>.</li>
+  <li>How many frames will be inserted, how many differ, and the new length.</li>
+</ol>
+
+<h2 id="phase">8. Phase shift</h2>
+<p>Delays the animation of the selected entries by some number of frames, so entries that animate identically can be set out of step.</p>
+<img src="08-phase.png" alt="the phase shift dialog">
+<ol>
+  <li>How many frames to delay the first selected entry by. Negative shifts the other way.</li>
+  <li>Extra delay added for each further selected entry, rounded down: a row of lights that chase each other.</li>
+  <li><b>wrap</b>: colours shifted past the last frame come back at the first. Off, they drop out and the vacated frames repeat their neighbour.</li>
+  <li>What the shift will do.</li>
+</ol>
+
+<h2 id="format">9. Colour format</h2>
+<img src="09-format.png" alt="the format dialog for a loaded image">
+<ol>
+  <li><b>Format&hellip;</b> changes the format at any time. Colours are kept at full 8-bit precision and only shown through the format, so switching to RGB5551 and back loses nothing.</li>
+  <li>What the change will do.</li>
+</ol>
+
+<h2 id="export">10. Export</h2>
+<img src="10-export.png" alt="the export dialog set to a multi-palette TIM">
+<ol>
+  <li>What to write: the raw image data, the sequence of palettes, a <code>.tim</code> holding the image and every palette, the palettes alone as a <code>.clt</code>, or a text file from a template.</li>
+  <li>For the PlayStation formats: how many palettes sit side by side in the CLUT before the next row starts. 1 stacks them.</li>
+  <li>Exactly what will be written: depth, CLUT size and layout.</li>
+  <li><b>Export</b> saves the file.</li>
+</ol>
+<img src="11-export-template.png" alt="the export dialog set to a text template">
+<ol>
+  <li>The template. <code>{{#frames}}...{{/frames}}</code> repeats once per frame, <code>{{#loop}}...{{/loop}}</code> and <code>{{^loop}}...{{/loop}}</code> depend on whether the animation loops, and <code>:hex</code> or <code>:hex4</code> formats a number in hexadecimal.</li>
+  <li>An unknown placeholder is left as written, so a typo shows up in the output.</li>
+</ol>
+<p>Placeholders: <code>name</code> <code>nameId</code> <code>nameUpper</code> <code>width</code> <code>height</code> <code>pixelCount</code> <code>paletteSize</code> <code>frameCount</code> <code>totalTicks</code> <code>fps</code> <code>loopStart</code> (-1 when not looping) <code>loopMode</code> <code>colorFormat</code> <code>colorFormatId</code>, and inside <code>{{#frames}}</code>: <code>index</code> <code>hold</code> <code>offset</code> <code>isLoopStart</code>.</p>
+
+<p><b>Save</b> writes the project as <code>.clutter.json</code>, which <b>Open&hellip;</b> reads back.</p>
+</main>
+</body>
+</html>

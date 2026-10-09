@@ -106,7 +106,9 @@ describe('the built artifact', () => {
   it('is one self-contained file with no external references', () => {
     const html = readFileSync(DIST, 'utf8');
     expect(html).not.toMatch(/src="https?:/);
-    expect(html).not.toMatch(/href="https?:/);
+    // A link the user can follow loads nothing; any other href would.
+    const loaded = html.replace(/<a\s[^>]*>/g, '');
+    expect(loaded).not.toMatch(/href="https?:/);
     expect(html).not.toMatch(/src="\.\//);
   });
 
